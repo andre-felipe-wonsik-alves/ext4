@@ -26,5 +26,8 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    print_superblock(sb);
+    ext4_sb_info ext4_info = init(image, sb);
+
+    print_superblock(ext4_info);
+    print_gdt(ext4_info);
 }

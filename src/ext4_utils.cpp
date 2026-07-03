@@ -12,7 +12,28 @@ bool read_superblock(std::fstream& image, super_block& sb) {
     return true;
 }
 
-void print_superblock(const super_block& sb) {
+bool read_gdt(ext4_sb_info& ext4_info) {
+    uint16_t desc_size = ext4_info.sb.s_desc_size;
+    uint64_t offset = ext4_info.gdt_offset;
+
+    for (uint64_t i = 0; i < ext4_info.num_groups; i++) {
+        group_description gd;
+
+        if (!read_bytes(ext4_info.image, offset, &gd, sizeof(group_description))) {
+            return false;
+        }
+        
+        ext4_info.gdt.push_back(gd);
+
+        offset += desc_size;
+    }
+
+    return true;
+}
+
+void print_superblock(const ext4_sb_info& ext4_info) {
+    super_block sb = ext4_info.sb;
+
     const int w = 30;
     std::cout << std::left << std::setfill(' ');
 
@@ -125,4 +146,46 @@ void print_superblock(const super_block& sb) {
     std::cout << std::setw(w) << "s_def_resgid_hi:" << sb.s_def_resgid_hi << "\n";
     std::cout << std::setw(w) << "s_reserved[0]:" << sb.s_reserved[0] << "\n";
     std::cout << std::setw(w) << "s_checksum:" << "0x" << std::hex << sb.s_checksum << std::dec << "\n";
+}
+
+void print_gdt(const ext4_sb_info& ext4_info) {
+    const int w = 30;
+    std::cout << std::left << std::setfill(' ');
+
+    for (size_t i = 0; i < ext4_info.gdt.size(); ++i) {
+        const auto& gd = ext4_info.gdt[i]; 
+
+        std::cout << std::setw(w) << "bg_block_bitmap_lo:" << gd.bg_block_bitmap_lo << "\n";
+        std::cout << std::setw(w) << "bg_inode_bitmap_lo:" << gd.bg_inode_bitmap_lo << "\n";
+        std::cout << std::setw(w) << "bg_inode_table_lo:" << gd.bg_inode_table_lo << "\n";
+        std::cout << std::setw(w) << "bg_free_blocks_count_lo:" << gd.bg_free_blocks_count_lo << "\n";
+        std::cout << std::setw(w) << "bg_free_inodes_count_lo:" << gd.bg_free_inodes_count_lo << "\n";
+        std::cout << std::setw(w) << "bg_used_dirs_count_lo:" << gd.bg_used_dirs_count_lo << "\n";
+        std::cout << "\n";
+    }
+}
+
+ext4_sb_info init(std::fstream& image, const super_block& sb) {
+    uint64_t block_size = get_block_size(sb);
+    uint64_t blocks_count = get_blocks_count(sb);
+    uint64_t num_groups = get_num_groups(sb);
+    uint16_t desc_size = sb.s_desc_size;
+    uint64_t gdt_offset = ((block_size == 1024) ? 2 : 1) * block_size;
+
+    ext4_sb_info ext4_info {
+        image,
+        sb,
+        {},
+        block_size,
+        blocks_count,
+        num_groups,
+        desc_size,
+        gdt_offset
+    };
+    
+    if (!read_gdt(ext4_info)) {
+        std::cerr << "error on read_gdt() in init() \n";
+    }
+
+    return ext4_info;
 }
