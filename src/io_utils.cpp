@@ -6,9 +6,22 @@ bool open_image(const std::string& path, std::fstream& image) {
     return image.is_open();
 }
 
-bool read_bytes(std::fstream& image, uint64_t offset, void* dest, size_t n) {
+bool read_bytes(std::fstream& image, uint64_t offset, void* buf, size_t n) {
     image.seekg(offset, std::ios::beg);
-    image.read(static_cast<char*>(dest), n);
+    image.read(static_cast<char*>(buf), n);
+
+    if (image.fail()) {
+        image.clear();
+
+        return false;
+    }
+
+    return true;
+}
+
+bool write_bytes(std::fstream& image, uint64_t offset, void* buf, size_t n) {
+    image.seekg(offset, std::ios::beg);
+    image.write(static_cast<char*>(buf), n);
 
     if (image.fail()) {
         image.clear();

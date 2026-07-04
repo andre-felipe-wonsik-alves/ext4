@@ -18,10 +18,20 @@ bool open_image(const std::string& path, std::fstream& image);
  *  Lê n bytes de uma imagem a partir de um offset 
  *  @param image: objeto std::fstream onde a imagem está aberta
  *  @param offset: byte inicial para leitura
- *  @param dest: objeto para armazenar os bytes lidos
+ *  @param buf: objeto para armazenar os bytes lidos
  *  @param n: quantidade de bytes lidos
  *  @returns true se os bytes foram lidos com sucesso; false caso contrário
  */
-bool read_bytes(std::fstream& image, uint64_t offset, void* dest, size_t n);
+bool read_bytes(std::fstream& image, uint64_t offset, void* buf, size_t n);
+
+/**
+ *  Escreve n bytes em uma imagem a partir de um offset 
+ *  @param image: objeto std::fstream onde a imagem está aberta
+ *  @param offset: byte inicial para escrita
+ *  @param buf: objeto contendo os bytes a serem escritos
+ *  @param n: quantidade de bytes escritos
+ *  @returns true se os bytes foram escritos com sucesso; false caso contrário
+ */
+bool write_bytes(std::fstream& image, uint64_t offset, void* buf, size_t n);
 
 #endif
