@@ -26,6 +26,8 @@ private:
   void ext4_export(const std::string &source,
                    const std::string &target); // export é palavra reservada
   void pwd();
+  void ext4_import(const std::string &source,
+                   const std::string &target); // export é palavra reservada
 
   void dispatch(std::vector<std::string>);
 
