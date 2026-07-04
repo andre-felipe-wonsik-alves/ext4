@@ -4,7 +4,32 @@
 #include "ext4_utils.h"
 #include "io_utils.h"
 
-bool read_superblock(std::fstream& image, super_block& sb) {
+bool Ext4FS::init(const std::string& img_path) {
+    if (!open_image(img_path, image)) {
+        std::cerr << "error on open_image() in init()\n";
+        return false;
+    }
+    
+    if (!read_superblock()) {
+        std::cerr << "error on read_superblock() in init()\n";
+        return false;
+    }
+
+    block_size = get_block_size();
+    blocks_count = get_blocks_count();
+    num_groups = get_num_groups();
+    desc_size = sb.s_desc_size;
+    gdt_offset = ((block_size == 1024) ? 2 : 1) * block_size;
+    
+    if (!read_gdt()) {
+        std::cerr << "error on read_gdt() in init() \n";
+        return false;
+    }
+
+    return true;
+}
+
+bool Ext4FS::read_superblock() {
     if (!read_bytes(image, 1024, &sb, sizeof(super_block))) {
         return false;
     }
@@ -12,52 +37,51 @@ bool read_superblock(std::fstream& image, super_block& sb) {
     return true;
 }
 
-bool read_gdt(ext4_sb_info& ext4_info) {
-    uint16_t desc_size = ext4_info.sb.s_desc_size;
-    uint64_t offset = ext4_info.gdt_offset;
+bool Ext4FS::read_gdt() {
+    uint16_t current_desc_size = sb.s_desc_size == 0 ? 32 : sb.s_desc_size;
+    uint64_t offset = gdt_offset;
 
-    for (uint64_t i = 0; i < ext4_info.num_groups; i++) {
+    for (uint64_t i = 0; i < num_groups; i++) {
         group_description gd{};
 
-        if (!read_bytes(ext4_info.image, offset, &gd, desc_size)) {
+        if (!read_bytes(image, offset, &gd, current_desc_size)) {
             return false;
         }
         
-        ext4_info.gdt.push_back(gd);
+        gdt.push_back(gd);
 
-        offset += desc_size;
+        offset += current_desc_size;
     }
 
     return true;
 }
 
-bool read_inode(ext4_sb_info& ext4_info, uint32_t inode_num, inode& inode) {
-    if (inode_num == 0 || inode_num > ext4_info.sb.s_inodes_count) {
+bool Ext4FS::read_inode(uint32_t inode_num, inode& inode_out) {
+    if (inode_num == 0 || inode_num > sb.s_inodes_count) {
         return false; 
     }
 
-    uint32_t bg = get_inode_block_group(inode_num, ext4_info.sb);
-    uint32_t index = get_inode_index(inode_num, ext4_info.sb);
+    uint32_t bg = get_inode_block_group(inode_num);
+    uint32_t index = get_inode_index(inode_num);
     
-    uint64_t inode_offset = index * ext4_info.sb.s_inode_size;
-    uint64_t inode_table_block = get_inode_table_block(ext4_info, bg);
+    uint64_t inode_offset = index * sb.s_inode_size;
+    uint64_t inode_table_block = get_inode_table_block(bg);
     
-    uint64_t block_offset = get_block_offset(inode_table_block, ext4_info.block_size) + inode_offset;
+    uint64_t block_offset = get_block_offset(inode_table_block) + inode_offset;
 
-    return read_bytes(ext4_info.image, block_offset, &inode, sizeof(inode));
+    return read_bytes(image, block_offset, &inode_out, sizeof(inode));
 }
 
-std::vector<char> read_inode_content(ext4_sb_info& ext4_info, const inode& inode) {
-    ext4_extent_header* header = (ext4_extent_header*)inode.i_block;
+std::vector<char> Ext4FS::read_inode_content(const inode& inode_in) {
+    ext4_extent_header* header = (ext4_extent_header*)inode_in.i_block;
     std::vector<ext4_extent> leaf_extents;
     
-    if (!read_leaf_extents(ext4_info, header, leaf_extents)) {
+    if (!read_leaf_extents(header, leaf_extents)) {
         std::cerr << "error on read_leaf_extents() in read_inode_content()\n";
         return {};
     }
     
-    uint64_t file_size = get_file_size(inode);
-    uint64_t block_size = ext4_info.block_size;
+    uint64_t file_size = get_file_size(inode_in);
     uint64_t rem_bytes = file_size;
     std::vector<char> inode_content; // i_block pode ser maior que file_size em algum momento?
     inode_content.reserve(file_size);
@@ -66,14 +90,14 @@ std::vector<char> read_inode_content(ext4_sb_info& ext4_info, const inode& inode
         if (rem_bytes == 0) break;
 
         uint64_t extent_phys_block = get_extent_phys_block(extent);
-        uint64_t offset = get_block_offset(extent_phys_block, block_size);
+        uint64_t offset = get_block_offset(extent_phys_block);
 
         // Compara-se o tamanho do extent com a quantidade de bytes a serem lidos para evitar ler lixo no último bloco
         uint64_t extent_bytes = (extent.ee_len <= 32768 ? extent.ee_len : extent.ee_len - 32768) * block_size;
         uint64_t bytes = extent_bytes < rem_bytes ? extent_bytes : rem_bytes;
         std::vector<char> buf(bytes);
 
-        if (!read_bytes(ext4_info.image, offset, buf.data(), bytes)) {
+        if (!read_bytes(image, offset, buf.data(), bytes)) {
             std::cerr << "error on read_bytes() in read_inode_content()\n";
             return {};
         }
@@ -88,7 +112,7 @@ std::vector<char> read_inode_content(ext4_sb_info& ext4_info, const inode& inode
     return inode_content;
 }
 
-bool read_leaf_extents(ext4_sb_info& ext4_info, const ext4_extent_header* header, std::vector<ext4_extent>& leaf_extents) {
+bool Ext4FS::read_leaf_extents(const ext4_extent_header* header, std::vector<ext4_extent>& leaf_extents) {
     // caso base é encontrar uma folha e colocá-la no vetor de folhas
     if (header->eh_depth == 0) {
         ext4_extent* extents = (ext4_extent*)(header+1);
@@ -97,24 +121,22 @@ bool read_leaf_extents(ext4_sb_info& ext4_info, const ext4_extent_header* header
             leaf_extents.push_back(extents[i]);
         }
     }
-
     // caso contrário, é necessário percorrer os índices na árvore até encontrar outras folhas
     else {
         ext4_extent_idx* indices = (ext4_extent_idx*)(header+1);
-        uint64_t block_size = ext4_info.block_size;
         std::vector<char> buf(block_size);
 
         for (uint16_t i = 0; i < header->eh_entries; i++) {
             uint64_t extent_phys_block = get_extent_idx_phys_block(indices[i]);
-            uint64_t offset = get_block_offset(extent_phys_block, block_size);
+            uint64_t offset = get_block_offset(extent_phys_block);
 
-            if (!read_bytes(ext4_info.image, offset, buf.data(), block_size)) {
+            if (!read_bytes(image, offset, buf.data(), block_size)) {
                 std::cerr << "error on read_bytes() in read_leaf_extents()\n";
                 return false;
             }
 
             // todos os nós contém um header, o primeiro byte do dó recém-lido é o início de seu header
-            if (!read_leaf_extents(ext4_info, (ext4_extent_header*)buf.data(), leaf_extents)) {
+            if (!read_leaf_extents((ext4_extent_header*)buf.data(), leaf_extents)) {
                 std::cerr << "error on read_leaf_extents() in read_leaf_extents()\n";
                 return false;
             };
@@ -124,9 +146,64 @@ bool read_leaf_extents(ext4_sb_info& ext4_info, const ext4_extent_header* header
     return true;
 }
 
-void print_superblock(const ext4_sb_info& ext4_info) {
-    super_block sb = ext4_info.sb;
+uint32_t Ext4FS::find_inode_by_path(const std::string& path, uint32_t inode_num) {
+    if (path.empty()) {
+        return inode_num;
+    }
 
+    if (path == "/") {
+        return 2;
+    }
+
+    inode curr_inode;
+    uint32_t curr_inode_num = inode_num;
+    std::vector<std::string> tokens = split_tokens(path);
+
+    for (size_t i = 0; i < tokens.size(); i++) {
+        if (!read_inode(curr_inode_num, curr_inode)) {
+            return 0;
+        }
+        
+        if (!inode_is_dir(curr_inode)) {
+            return 0;
+        }
+        
+        std::vector<char> dir_content = read_inode_content(curr_inode);
+        curr_inode_num = find_inode_by_dir(dir_content, tokens[i]);
+
+        if (curr_inode_num == 0) {
+            return 0;
+        }
+    }
+
+    return curr_inode_num;
+}
+
+uint32_t Ext4FS::find_inode_by_dir(const std::vector<char>& dir_content, const std::string& file_name) {
+    size_t offset = 0;
+
+    while (offset < dir_content.size()) {
+        ext4_dir_entry_2* dir_entry = (ext4_dir_entry_2*)(&dir_content[offset]);
+
+        if (dir_entry->inode != 0) {
+            std::string dir_entry_name(dir_entry->name, dir_entry->name_len);
+
+            if (dir_entry_name == file_name) {
+                return dir_entry->inode;
+            }
+        }
+
+        if (dir_entry->rec_len == 0) {
+            break;
+        }
+
+        offset += dir_entry->rec_len;
+    }
+
+    return 0;
+}
+
+void Ext4FS::print_superblock() const {
     const int w = 30;
     std::cout << std::left << std::setfill(' ');
 
@@ -241,12 +318,12 @@ void print_superblock(const ext4_sb_info& ext4_info) {
     std::cout << std::setw(w) << "s_checksum:" << "0x" << std::hex << sb.s_checksum << std::dec << "\n";
 }
 
-void print_gdt(const ext4_sb_info& ext4_info) {
+void Ext4FS::print_gdt() const {
     const int w = 30;
     std::cout << std::left << std::setfill(' ');
 
-    for (size_t i = 0; i < ext4_info.gdt.size(); ++i) {
-        const auto& gd = ext4_info.gdt[i]; 
+    for (size_t i = 0; i < gdt.size(); i++) {
+        const auto& gd = gdt[i]; 
 
         std::cout << std::setw(w) << "bg_block_bitmap_lo:" << gd.bg_block_bitmap_lo << "\n";
         std::cout << std::setw(w) << "bg_inode_bitmap_lo:" << gd.bg_inode_bitmap_lo << "\n";
@@ -254,7 +331,7 @@ void print_gdt(const ext4_sb_info& ext4_info) {
         std::cout << std::setw(w) << "bg_free_blocks_count_lo:" << gd.bg_free_blocks_count_lo << "\n";
         std::cout << std::setw(w) << "bg_free_inodes_count_lo:" << gd.bg_free_inodes_count_lo << "\n";
         std::cout << std::setw(w) << "bg_used_dirs_count_lo:" << gd.bg_used_dirs_count_lo << "\n";
-        std::cout << std::setw(w) <<  "bg_flags:" << gd.bg_flags << "\n";
+        std::cout << std::setw(w) << "bg_flags:" << gd.bg_flags << "\n";
         std::cout << std::setw(w) << "bg_exclude_bitmap_lo:" << gd.bg_exclude_bitmap_lo << "\n";
         std::cout << std::setw(w) << "bg_block_bitmap_csum_lo:" << gd.bg_block_bitmap_csum_lo << "\n";
         std::cout << std::setw(w) << "bg_inode_bitmap_csum_lo:" << gd.bg_inode_bitmap_csum_lo << "\n";
@@ -271,89 +348,67 @@ void print_gdt(const ext4_sb_info& ext4_info) {
         std::cout << std::setw(w) << "bg_exclude_bitmap_hi:" << gd.bg_exclude_bitmap_hi << "\n";
         std::cout << std::setw(w) << "bg_block_bitmap_csum_hi:" << gd.bg_block_bitmap_csum_hi << "\n";
         std::cout << std::setw(w) << "bg_inode_bitmap_csum_hi:" << gd.bg_inode_bitmap_csum_hi << "\n";
-        std::cout << std::setw(w) << "bg_reserved:" << gd.bg_reserved << "\n";
-        std::cout << "\n";
+        std::cout << std::setw(w) << "bg_reserved:" << gd.bg_reserved << "\n\n";
     }
 }
 
-void print_inode(const inode& inode, uint32_t inode_num) {
+void Ext4FS::print_inode(const inode& inode_in, uint32_t /*inode_num*/) const {
     const int w = 30;
     std::cout << std::left << std::setfill(' ');
 
-    std::cout << std::setw(w) << "i_mode:" << "0x" << std::hex << inode.i_mode << std::dec << "\n";
-    std::cout << std::setw(w) << "i_uid:" << inode.i_uid << "\n";
-    std::cout << std::setw(w) << "i_size_lo:" << inode.i_size_lo << "\n";
-    std::cout << std::setw(w) << "i_atime:" << inode.i_atime << "\n";
-    std::cout << std::setw(w) << "i_ctime:" << inode.i_ctime << "\n";
-    std::cout << std::setw(w) << "i_mtime:" << inode.i_mtime << "\n";
-    std::cout << std::setw(w) << "i_dtime:" << inode.i_dtime << "\n";
-    std::cout << std::setw(w) << "i_gid:" << inode.i_gid << "\n";
-    std::cout << std::setw(w) << "i_links_count:" << inode.i_links_count << "\n";
-    std::cout << std::setw(w) << "i_blocks_lo:" << inode.i_blocks_lo << "\n";
-    std::cout << std::setw(w) << "i_flags:" << "0x" << std::hex << inode.i_flags << std::dec << "\n";
-    
-    std::cout << std::setw(w) << "l_i_version:" << inode.osd1.linux1.l_i_version << "\n";
+    std::cout << std::setw(w) << "i_mode:" << "0x" << std::hex << inode_in.i_mode << std::dec << "\n";
+    std::cout << std::setw(w) << "i_uid:" << inode_in.i_uid << "\n";
+    std::cout << std::setw(w) << "i_size_lo:" << inode_in.i_size_lo << "\n";
+    std::cout << std::setw(w) << "i_atime:" << inode_in.i_atime << "\n";
+    std::cout << std::setw(w) << "i_ctime:" << inode_in.i_ctime << "\n";
+    std::cout << std::setw(w) << "i_mtime:" << inode_in.i_mtime << "\n";
+    std::cout << std::setw(w) << "i_dtime:" << inode_in.i_dtime << "\n";
+    std::cout << std::setw(w) << "i_gid:" << inode_in.i_gid << "\n";
+    std::cout << std::setw(w) << "i_links_count:" << inode_in.i_links_count << "\n";
+    std::cout << std::setw(w) << "i_blocks_lo:" << inode_in.i_blocks_lo << "\n";
+    std::cout << std::setw(w) << "i_flags:" << "0x" << std::hex << inode_in.i_flags << std::dec << "\n";
 
-    std::cout << std::setw(w) << "h_i_translator:" << inode.osd1.hurd1.h_i_translator << "\n";
+    std::cout << std::setw(w) << "l_i_version:" << inode_in.osd1.linux1.l_i_version << "\n";
 
-    std::cout << std::setw(w) << "m_i_reserved1:" << inode.osd1.masix1.m_i_reserved1 << "\n";
+    std::cout << std::setw(w) << "h_i_translator:" << inode_in.osd1.hurd1.h_i_translator << "\n";
 
-    std::cout << std::setw(w) << "i_block:" << std::string_view(reinterpret_cast<const char*>(inode.i_block), 16) << "\n";
-    std::cout << std::setw(w) << "i_generation:" << inode.i_generation << "\n";
-    std::cout << std::setw(w) << "i_file_acl_lo:" << inode.i_file_acl_lo << "\n";
-    std::cout << std::setw(w) << "i_size_high:" << inode.i_size_high << "\n";
-    std::cout << std::setw(w) << "i_obso_faddr:" << inode.i_obso_faddr << "\n";
-    
-    std::cout << std::setw(w) << "l_i_blocks_high:" << inode.osd2.linux2.l_i_blocks_high << "\n";
-    std::cout << std::setw(w) << "l_i_file_acl_high:" << inode.osd2.linux2.l_i_file_acl_high << "\n";
-    std::cout << std::setw(w) << "l_i_uid_high:" << inode.osd2.linux2.l_i_uid_high << "\n";
-    std::cout << std::setw(w) << "l_i_gid_high:" << inode.osd2.linux2.l_i_gid_high << "\n";
-    std::cout << std::setw(w) << "l_i_checksum_lo:" << "0x" << std::hex << inode.osd2.linux2.l_i_checksum_lo << std::dec << "\n";
-    std::cout << std::setw(w) << "l_i_reserved:" << inode.osd2.linux2.l_i_reserved << "\n";
+    std::cout << std::setw(w) << "m_i_reserved1:" << inode_in.osd1.masix1.m_i_reserved1 << "\n";
 
-    std::cout << std::setw(w) << "h_i_reserved1:" << inode.osd2.hurd2.h_i_reserved1 << "\n";
-    std::cout << std::setw(w) << "h_i_mode_high:" << inode.osd2.hurd2.h_i_mode_high << "\n";
-    std::cout << std::setw(w) << "h_i_uid_high:" << inode.osd2.hurd2.h_i_uid_high << "\n";
-    std::cout << std::setw(w) << "h_i_gid_high:" << inode.osd2.hurd2.h_i_gid_high << "\n";
-    std::cout << std::setw(w) << "h_i_author:" << inode.osd2.hurd2.h_i_author << "\n";
-
-    std::cout << std::setw(w) << "m_i_reserved1:" << inode.osd2.masix2.m_i_reserved1 << "\n";
-    std::cout << std::setw(w) << "m_i_file_acl_high:" << inode.osd2.masix2.m_i_file_acl_high << "\n";
-    std::cout << std::setw(w) << "m_i_reserved2:" << inode.osd2.masix2.m_i_reserved2[0] << inode.osd2.masix2.m_i_reserved2[1] << "\n";
-
-    std::cout << std::setw(w) << "i_extra_isize:" << inode.i_extra_isize << "\n";
-    std::cout << std::setw(w) << "i_checksum_hi:" << "0x" << std::hex << inode.i_checksum_hi << std::dec << "\n";
-    std::cout << std::setw(w) << "i_ctime_extra:" << inode.i_ctime_extra << "\n";
-    std::cout << std::setw(w) << "i_mtime_extra:" << inode.i_mtime_extra << "\n";
-    std::cout << std::setw(w) << "i_atime_extra:" << inode.i_atime_extra << "\n";
-    std::cout << std::setw(w) << "i_crtime:" << inode.i_crtime << "\n";
-    std::cout << std::setw(w) << "i_crtime_extra:" << inode.i_crtime_extra << "\n";
-    std::cout << std::setw(w) << "i_version_hi:" << inode.i_version_hi << "\n";
-    std::cout << std::setw(w) << "i_projid:" << inode.i_projid << "\n";
-}
-
-bool init_ext4(const std::string& img_path, ext4_sb_info& ext4_info) {
-    if (!open_image(img_path, ext4_info.image)) {
-        std::cerr << "error on open_image() in init_ext4()";
-        
-        return false;
+    std::cout << std::setw(w) << "i_block:" << "\n";
+    for (int i = 0; i < 15; i++) {
+        std::cout << inode_in.i_block[i];
     }
-    
-    if (!read_superblock(ext4_info.image, ext4_info.sb)) {
-        std::cerr << "error on read_superblock() in init_ext4()";
-        
-        return false;
-    }
+    std::cout << "\n";
 
-    ext4_info.block_size = get_block_size(ext4_info.sb);
-    ext4_info.blocks_count = get_blocks_count(ext4_info.sb);
-    ext4_info.num_groups = get_num_groups(ext4_info.sb);
-    ext4_info.desc_size = ext4_info.sb.s_desc_size;
-    ext4_info.gdt_offset = ((ext4_info.block_size == 1024) ? 2 : 1) * ext4_info.block_size;
-    
-    if (!read_gdt(ext4_info)) {
-        std::cerr << "error on read_gdt() in init_ext4() \n";
-    }
+    std::cout << std::setw(w) << "i_generation:" << inode_in.i_generation << "\n";
+    std::cout << std::setw(w) << "i_file_acl_lo:" << inode_in.i_file_acl_lo << "\n";
+    std::cout << std::setw(w) << "i_size_high:" << inode_in.i_size_high << "\n";
+    std::cout << std::setw(w) << "i_obso_faddr:" << inode_in.i_obso_faddr << "\n";
 
-    return true;
+    std::cout << std::setw(w) << "l_i_blocks_high:" << inode_in.osd2.linux2.l_i_blocks_high << "\n";
+    std::cout << std::setw(w) << "l_i_file_acl_high:" << inode_in.osd2.linux2.l_i_file_acl_high << "\n";
+    std::cout << std::setw(w) << "l_i_uid_high:" << inode_in.osd2.linux2.l_i_uid_high << "\n";
+    std::cout << std::setw(w) << "l_i_gid_high:" << inode_in.osd2.linux2.l_i_gid_high << "\n";
+    std::cout << std::setw(w) << "l_i_checksum_lo:" << "0x" << std::hex << inode_in.osd2.linux2.l_i_checksum_lo << std::dec << "\n";
+    std::cout << std::setw(w) << "l_i_reserved:" << inode_in.osd2.linux2.l_i_reserved << "\n";
+
+    std::cout << std::setw(w) << "h_i_reserved1:" << inode_in.osd2.hurd2.h_i_reserved1 << "\n";
+    std::cout << std::setw(w) << "h_i_mode_high:" << inode_in.osd2.hurd2.h_i_mode_high << "\n";
+    std::cout << std::setw(w) << "h_i_uid_high:" << inode_in.osd2.hurd2.h_i_uid_high << "\n";
+    std::cout << std::setw(w) << "h_i_gid_high:" << inode_in.osd2.hurd2.h_i_gid_high << "\n";
+    std::cout << std::setw(w) << "h_i_author:" << inode_in.osd2.hurd2.h_i_author << "\n";
+
+    std::cout << std::setw(w) << "m_i_reserved1:" << inode_in.osd2.masix2.m_i_reserved1 << "\n";
+    std::cout << std::setw(w) << "m_i_file_acl_high:" << inode_in.osd2.masix2.m_i_file_acl_high << "\n";
+    std::cout << std::setw(w) << "m_i_reserved2:" << inode_in.osd2.masix2.m_i_reserved2[0] << inode_in.osd2.masix2.m_i_reserved2[1] << "\n";
+
+    std::cout << std::setw(w) << "i_extra_isize:" << inode_in.i_extra_isize << "\n";
+    std::cout << std::setw(w) << "i_checksum_hi:" << "0x" << std::hex << inode_in.i_checksum_hi << std::dec << "\n";
+    std::cout << std::setw(w) << "i_ctime_extra:" << inode_in.i_ctime_extra << "\n";
+    std::cout << std::setw(w) << "i_mtime_extra:" << inode_in.i_mtime_extra << "\n";
+    std::cout << std::setw(w) << "i_atime_extra:" << inode_in.i_atime_extra << "\n";
+    std::cout << std::setw(w) << "i_crtime:" << inode_in.i_crtime << "\n";
+    std::cout << std::setw(w) << "i_crtime_extra:" << inode_in.i_crtime_extra << "\n";
+    std::cout << std::setw(w) << "i_version_hi:" << inode_in.i_version_hi << "\n";
+    std::cout << std::setw(w) << "i_projid:" << inode_in.i_projid << "\n";
 }

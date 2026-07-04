@@ -257,16 +257,3 @@ struct ext4_dir_entry_2 {
     char name[255];
 };
 #pragma pack(pop)
-
-struct ext4_sb_info
-{
-    std::fstream image;
-    super_block sb;
-    std::vector<group_description> gdt;
-
-    uint64_t block_size;
-    uint64_t blocks_count;
-    uint64_t num_groups;
-    uint16_t desc_size;
-    uint64_t gdt_offset;
-};
