@@ -178,6 +178,24 @@ void print_gdt(const ext4_sb_info& ext4_info) {
         std::cout << std::setw(w) << "bg_free_blocks_count_lo:" << gd.bg_free_blocks_count_lo << "\n";
         std::cout << std::setw(w) << "bg_free_inodes_count_lo:" << gd.bg_free_inodes_count_lo << "\n";
         std::cout << std::setw(w) << "bg_used_dirs_count_lo:" << gd.bg_used_dirs_count_lo << "\n";
+        std::cout << std::setw(w) <<  "bg_flags:" << gd.bg_flags << "\n";
+        std::cout << std::setw(w) << "bg_exclude_bitmap_lo:" << gd.bg_exclude_bitmap_lo << "\n";
+        std::cout << std::setw(w) << "bg_block_bitmap_csum_lo:" << gd.bg_block_bitmap_csum_lo << "\n";
+        std::cout << std::setw(w) << "bg_inode_bitmap_csum_lo:" << gd.bg_inode_bitmap_csum_lo << "\n";
+        std::cout << std::setw(w) << "bg_itable_unused_lo:" << gd.bg_itable_unused_lo << "\n";
+        std::cout << std::setw(w) << "bg_checksum:" << gd.bg_checksum << "\n";
+
+        std::cout << std::setw(w) << "bg_block_bitmap_hi:" << gd.bg_block_bitmap_hi << "\n";
+        std::cout << std::setw(w) << "bg_inode_bitmap_hi:" << gd.bg_inode_bitmap_hi << "\n";
+        std::cout << std::setw(w) << "bg_inode_table_hi:" << gd.bg_inode_table_hi << "\n";
+        std::cout << std::setw(w) << "bg_free_blocks_count_hi:" << gd.bg_free_blocks_count_hi << "\n";
+        std::cout << std::setw(w) << "bg_free_inodes_count_hi:" << gd.bg_free_inodes_count_hi << "\n";
+        std::cout << std::setw(w) << "bg_used_dirs_count_hi:" << gd.bg_used_dirs_count_hi << "\n";
+        std::cout << std::setw(w) << "bg_itable_unused_hi:" << gd.bg_itable_unused_hi << "\n";
+        std::cout << std::setw(w) << "bg_exclude_bitmap_hi:" << gd.bg_exclude_bitmap_hi << "\n";
+        std::cout << std::setw(w) << "bg_block_bitmap_csum_hi:" << gd.bg_block_bitmap_csum_hi << "\n";
+        std::cout << std::setw(w) << "bg_inode_bitmap_csum_hi:" << gd.bg_inode_bitmap_csum_hi << "\n";
+        std::cout << std::setw(w) << "bg_reserved:" << gd.bg_reserved << "\n";
         std::cout << "\n";
     }
 }
@@ -188,36 +206,54 @@ void print_inode(const inode& inode, uint32_t inode_num) {
 
     std::cout << std::setw(w) << "i_mode:" << "0x" << std::hex << inode.i_mode << std::dec << "\n";
     std::cout << std::setw(w) << "i_uid:" << inode.i_uid << "\n";
-    std::cout << std::setw(w) << "i_gid:" << inode.i_gid << "\n";
-    std::cout << std::setw(w) << "i_size_high:" << inode.i_size_high << "\n";
     std::cout << std::setw(w) << "i_size_lo:" << inode.i_size_lo << "\n";
-    std::cout << std::setw(w) << "i_links_count:" << inode.i_links_count << "\n";
-    std::cout << std::setw(w) << "i_blocks_lo:" << inode.i_blocks_lo << "\n";
-    std::cout << std::setw(w) << "i_flags:" << "0x" << std::hex << inode.i_flags << std::dec << "\n";
-
     std::cout << std::setw(w) << "i_atime:" << inode.i_atime << "\n";
     std::cout << std::setw(w) << "i_ctime:" << inode.i_ctime << "\n";
     std::cout << std::setw(w) << "i_mtime:" << inode.i_mtime << "\n";
     std::cout << std::setw(w) << "i_dtime:" << inode.i_dtime << "\n";
-
+    std::cout << std::setw(w) << "i_gid:" << inode.i_gid << "\n";
+    std::cout << std::setw(w) << "i_links_count:" << inode.i_links_count << "\n";
+    std::cout << std::setw(w) << "i_blocks_lo:" << inode.i_blocks_lo << "\n";
+    std::cout << std::setw(w) << "i_flags:" << "0x" << std::hex << inode.i_flags << std::dec << "\n";
+    
     std::cout << std::setw(w) << "l_i_version:" << inode.osd1.linux1.l_i_version << "\n";
 
+    std::cout << std::setw(w) << "h_i_translator:" << inode.osd1.hurd1.h_i_translator << "\n";
+
+    std::cout << std::setw(w) << "m_i_reserved1:" << inode.osd1.masix1.m_i_reserved1 << "\n";
+
+    std::cout << std::setw(w) << "i_block:" << std::string_view(reinterpret_cast<const char*>(inode.i_block), 16) << "\n";
     std::cout << std::setw(w) << "i_generation:" << inode.i_generation << "\n";
     std::cout << std::setw(w) << "i_file_acl_lo:" << inode.i_file_acl_lo << "\n";
+    std::cout << std::setw(w) << "i_size_high:" << inode.i_size_high << "\n";
     std::cout << std::setw(w) << "i_obso_faddr:" << inode.i_obso_faddr << "\n";
-
+    
     std::cout << std::setw(w) << "l_i_blocks_high:" << inode.osd2.linux2.l_i_blocks_high << "\n";
     std::cout << std::setw(w) << "l_i_file_acl_high:" << inode.osd2.linux2.l_i_file_acl_high << "\n";
     std::cout << std::setw(w) << "l_i_uid_high:" << inode.osd2.linux2.l_i_uid_high << "\n";
     std::cout << std::setw(w) << "l_i_gid_high:" << inode.osd2.linux2.l_i_gid_high << "\n";
     std::cout << std::setw(w) << "l_i_checksum_lo:" << "0x" << std::hex << inode.osd2.linux2.l_i_checksum_lo << std::dec << "\n";
+    std::cout << std::setw(w) << "l_i_reserved:" << inode.osd2.linux2.l_i_reserved << "\n";
+
+    std::cout << std::setw(w) << "h_i_reserved1:" << inode.osd2.hurd2.h_i_reserved1 << "\n";
+    std::cout << std::setw(w) << "h_i_mode_high:" << inode.osd2.hurd2.h_i_mode_high << "\n";
+    std::cout << std::setw(w) << "h_i_uid_high:" << inode.osd2.hurd2.h_i_uid_high << "\n";
+    std::cout << std::setw(w) << "h_i_gid_high:" << inode.osd2.hurd2.h_i_gid_high << "\n";
+    std::cout << std::setw(w) << "h_i_author:" << inode.osd2.hurd2.h_i_author << "\n";
+
+    std::cout << std::setw(w) << "m_i_reserved1:" << inode.osd2.masix2.m_i_reserved1 << "\n";
+    std::cout << std::setw(w) << "m_i_file_acl_high:" << inode.osd2.masix2.m_i_file_acl_high << "\n";
+    std::cout << std::setw(w) << "m_i_reserved2:" << inode.osd2.masix2.m_i_reserved2[0] << inode.osd2.masix2.m_i_reserved2[1] << "\n";
 
     std::cout << std::setw(w) << "i_extra_isize:" << inode.i_extra_isize << "\n";
     std::cout << std::setw(w) << "i_checksum_hi:" << "0x" << std::hex << inode.i_checksum_hi << std::dec << "\n";
+    std::cout << std::setw(w) << "i_ctime_extra:" << inode.i_ctime_extra << "\n";
+    std::cout << std::setw(w) << "i_mtime_extra:" << inode.i_mtime_extra << "\n";
+    std::cout << std::setw(w) << "i_atime_extra:" << inode.i_atime_extra << "\n";
     std::cout << std::setw(w) << "i_crtime:" << inode.i_crtime << "\n";
+    std::cout << std::setw(w) << "i_crtime_extra:" << inode.i_crtime_extra << "\n";
+    std::cout << std::setw(w) << "i_version_hi:" << inode.i_version_hi << "\n";
     std::cout << std::setw(w) << "i_projid:" << inode.i_projid << "\n";
-
-    // print_extent(inode_num) ?
 }
 
 ext4_sb_info init(std::fstream& image, const super_block& sb) {

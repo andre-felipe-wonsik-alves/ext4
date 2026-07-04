@@ -171,7 +171,6 @@ struct inode
     uint32_t i_blocks_lo;
     uint32_t i_flags;
 
-    // marcador union indica que eles compartilharão o mesmo espaço de memória
     union
     {
         struct
@@ -215,7 +214,7 @@ struct inode
         } hurd2;
         struct
         {
-            uint16_t h_i_reserved1;
+            uint16_t m_i_reserved1;
             uint16_t m_i_file_acl_high;
             uint32_t m_i_reserved2[2];
         } masix2;
