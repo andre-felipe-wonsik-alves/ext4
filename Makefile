@@ -3,12 +3,13 @@ INC_DIR := include
 BUILD_DIR := build
 BIN_DIR	:= $(BUILD_DIR)/bin
 OBJ_DIR := $(BUILD_DIR)/obj
+STD_CPP := -std=c++17
 
 TARGET := $(BIN_DIR)/ext4_shell
 img ?= resources/myext4image4k.img
 
 CXX := g++
-CXXFLAGS := -Wall -Wextra -I$(INC_DIR)
+CXXFLAGS := $(STD_CPP) -Wall -Wextra -I$(INC_DIR)
 LDLIBS := -lm
 
 SOURCES := $(wildcard $(SRC_DIR)/*.cpp)
