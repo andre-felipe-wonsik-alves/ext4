@@ -27,7 +27,15 @@ int main(int argc, char* argv[]) {
     }
 
     ext4_sb_info ext4_info = init(image, sb);
+    
+    inode inode;
+    
+    if (!read_inode(ext4_info, 2, inode)) {
+        std::cerr << "error on read_inode() in main()";
+        return 1;
+    }
 
     print_superblock(ext4_info);
     print_gdt(ext4_info);
+    print_inode(inode, 2);
 }

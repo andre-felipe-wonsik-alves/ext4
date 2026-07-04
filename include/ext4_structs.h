@@ -231,6 +231,36 @@ struct inode
     uint32_t i_version_hi;
     uint32_t i_projid;
 };
+
+struct ext4_extent_header {
+    uint16_t eh_magic;
+    uint16_t eh_entries;
+    uint16_t eh_max;
+    uint16_t eh_depth;
+    uint32_t eh_generation;
+};
+
+struct ext4_extent_idx {
+    uint32_t ei_block;
+    uint32_t ei_leaf_lo;
+    uint16_t ei_leaf_hi;
+    uint16_t ei_unused;
+};
+
+struct ext4_extent {
+    uint32_t ee_block;
+    uint16_t ee_len;
+    uint16_t ee_start_hi;
+    uint32_t ee_start_lo;
+};
+
+struct ext4_dir_entry_2 {
+    uint32_t inode;
+    uint16_t rec_len;
+    uint8_t  name_len;
+    uint8_t  file_type;
+    char     name[255];
+};
 #pragma pack(pop)
 
 struct ext4_sb_info

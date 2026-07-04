@@ -31,6 +31,23 @@ bool read_gdt(ext4_sb_info& ext4_info) {
     return true;
 }
 
+bool read_inode(ext4_sb_info& ext4_info, uint32_t inode_num, inode& inode) {
+    if (inode_num == 0 || inode_num > ext4_info.sb.s_inodes_count) {
+        return false; 
+    }
+
+    uint32_t bg = get_inode_block_group(inode_num, ext4_info.sb);
+    uint32_t index = get_inode_index(inode_num, ext4_info.sb);
+    
+    uint64_t inode_offset = index * ext4_info.sb.s_inode_size;
+    uint64_t inode_table_block = get_inode_table_block(ext4_info, bg);
+    
+    uint64_t block_offset = get_block_offset(inode_table_block, ext4_info.sb) + inode_offset;
+
+    return read_bytes(ext4_info.image, block_offset, &inode, sizeof(inode));
+}
+
+
 void print_superblock(const ext4_sb_info& ext4_info) {
     super_block sb = ext4_info.sb;
 
@@ -163,6 +180,44 @@ void print_gdt(const ext4_sb_info& ext4_info) {
         std::cout << std::setw(w) << "bg_used_dirs_count_lo:" << gd.bg_used_dirs_count_lo << "\n";
         std::cout << "\n";
     }
+}
+
+void print_inode(const inode& inode, uint32_t inode_num) {
+    const int w = 30;
+    std::cout << std::left << std::setfill(' ');
+
+    std::cout << std::setw(w) << "i_mode:" << "0x" << std::hex << inode.i_mode << std::dec << "\n";
+    std::cout << std::setw(w) << "i_uid:" << inode.i_uid << "\n";
+    std::cout << std::setw(w) << "i_gid:" << inode.i_gid << "\n";
+    std::cout << std::setw(w) << "i_size_high:" << inode.i_size_high << "\n";
+    std::cout << std::setw(w) << "i_size_lo:" << inode.i_size_lo << "\n";
+    std::cout << std::setw(w) << "i_links_count:" << inode.i_links_count << "\n";
+    std::cout << std::setw(w) << "i_blocks_lo:" << inode.i_blocks_lo << "\n";
+    std::cout << std::setw(w) << "i_flags:" << "0x" << std::hex << inode.i_flags << std::dec << "\n";
+
+    std::cout << std::setw(w) << "i_atime:" << inode.i_atime << "\n";
+    std::cout << std::setw(w) << "i_ctime:" << inode.i_ctime << "\n";
+    std::cout << std::setw(w) << "i_mtime:" << inode.i_mtime << "\n";
+    std::cout << std::setw(w) << "i_dtime:" << inode.i_dtime << "\n";
+
+    std::cout << std::setw(w) << "l_i_version:" << inode.osd1.linux1.l_i_version << "\n";
+
+    std::cout << std::setw(w) << "i_generation:" << inode.i_generation << "\n";
+    std::cout << std::setw(w) << "i_file_acl_lo:" << inode.i_file_acl_lo << "\n";
+    std::cout << std::setw(w) << "i_obso_faddr:" << inode.i_obso_faddr << "\n";
+
+    std::cout << std::setw(w) << "l_i_blocks_high:" << inode.osd2.linux2.l_i_blocks_high << "\n";
+    std::cout << std::setw(w) << "l_i_file_acl_high:" << inode.osd2.linux2.l_i_file_acl_high << "\n";
+    std::cout << std::setw(w) << "l_i_uid_high:" << inode.osd2.linux2.l_i_uid_high << "\n";
+    std::cout << std::setw(w) << "l_i_gid_high:" << inode.osd2.linux2.l_i_gid_high << "\n";
+    std::cout << std::setw(w) << "l_i_checksum_lo:" << "0x" << std::hex << inode.osd2.linux2.l_i_checksum_lo << std::dec << "\n";
+
+    std::cout << std::setw(w) << "i_extra_isize:" << inode.i_extra_isize << "\n";
+    std::cout << std::setw(w) << "i_checksum_hi:" << "0x" << std::hex << inode.i_checksum_hi << std::dec << "\n";
+    std::cout << std::setw(w) << "i_crtime:" << inode.i_crtime << "\n";
+    std::cout << std::setw(w) << "i_projid:" << inode.i_projid << "\n";
+
+    // print_extent(inode_num) ?
 }
 
 ext4_sb_info init(std::fstream& image, const super_block& sb) {
