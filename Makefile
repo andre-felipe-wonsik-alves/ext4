@@ -26,9 +26,11 @@ $(BIN_DIR):
 $(OBJ_DIR):
 	mkdir -p $(OBJ_DIR)
 
-.PHONY: all run clean
+.PHONY: all build run clean
 
-all: $(TARGET)
+all: clean build run
+
+build: $(TARGET)
 
 run: $(TARGET)
 	$(TARGET) $(img)
