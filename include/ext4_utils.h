@@ -117,7 +117,7 @@ inline uint32_t get_inode_index(uint32_t inode_num, const super_block& sb) {
 }
 
 /**
- * Retorna o bloco iniical da tabela de inodes de um grupo de blocas
+ * Retorna o bloco inicial da tabela de inodes de um grupo de blocas
  * @param ext4_info: número do inode
  * @param bg: número do grupo de blocos
  * @returns bg_inode_table_hi << 32 | bg_inode_table_lo
