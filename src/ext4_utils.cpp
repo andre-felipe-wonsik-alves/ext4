@@ -17,9 +17,9 @@ bool read_gdt(ext4_sb_info& ext4_info) {
     uint64_t offset = ext4_info.gdt_offset;
 
     for (uint64_t i = 0; i < ext4_info.num_groups; i++) {
-        group_description gd;
+        group_description gd{};
 
-        if (!read_bytes(ext4_info.image, offset, &gd, sizeof(group_description))) {
+        if (!read_bytes(ext4_info.image, offset, &gd, desc_size)) {
             return false;
         }
         
@@ -42,11 +42,87 @@ bool read_inode(ext4_sb_info& ext4_info, uint32_t inode_num, inode& inode) {
     uint64_t inode_offset = index * ext4_info.sb.s_inode_size;
     uint64_t inode_table_block = get_inode_table_block(ext4_info, bg);
     
-    uint64_t block_offset = get_block_offset(inode_table_block, ext4_info.sb) + inode_offset;
+    uint64_t block_offset = get_block_offset(inode_table_block, ext4_info.block_size) + inode_offset;
 
     return read_bytes(ext4_info.image, block_offset, &inode, sizeof(inode));
 }
 
+std::vector<char> read_inode_content(ext4_sb_info& ext4_info, const inode& inode) {
+    ext4_extent_header* header = (ext4_extent_header*)inode.i_block;
+    std::vector<ext4_extent> leaf_extents;
+    
+    if (!read_leaf_extents(ext4_info, header, leaf_extents)) {
+        std::cerr << "error on read_leaf_extents() in read_inode_content()\n";
+        return {};
+    }
+    
+    uint64_t file_size = get_file_size(inode);
+    uint64_t block_size = ext4_info.block_size;
+    uint64_t rem_bytes = file_size;
+    std::vector<char> inode_content; // i_block pode ser maior que file_size em algum momento?
+    inode_content.reserve(file_size);
+
+    for (const auto& extent : leaf_extents) {
+        if (rem_bytes == 0) break;
+
+        uint64_t extent_phys_block = get_extent_phys_block(extent);
+        uint64_t offset = get_block_offset(extent_phys_block, block_size);
+
+        // Compara-se o tamanho do extent com a quantidade de bytes a serem lidos para evitar ler lixo no último bloco
+        uint64_t extent_bytes = (extent.ee_len <= 32768 ? extent.ee_len : extent.ee_len - 32768) * block_size;
+        uint64_t bytes = extent_bytes < rem_bytes ? extent_bytes : rem_bytes;
+        std::vector<char> buf(bytes);
+
+        if (!read_bytes(ext4_info.image, offset, buf.data(), bytes)) {
+            std::cerr << "error on read_bytes() in read_inode_content()\n";
+            return {};
+        }
+
+        for (uint64_t i = 0; i < bytes; i++) {
+            inode_content.push_back(buf[i]);
+        }
+
+        rem_bytes -= bytes;
+    }
+    
+    return inode_content;
+}
+
+bool read_leaf_extents(ext4_sb_info& ext4_info, const ext4_extent_header* header, std::vector<ext4_extent>& leaf_extents) {
+    // caso base é encontrar uma folha e colocá-la no vetor de folhas
+    if (header->eh_depth == 0) {
+        ext4_extent* extents = (ext4_extent*)(header+1);
+
+        for (uint16_t i = 0; i < header->eh_entries; i++) {
+            leaf_extents.push_back(extents[i]);
+        }
+    }
+
+    // caso contrário, é necessário percorrer os índices na árvore até encontrar outras folhas
+    else {
+        ext4_extent_idx* indices = (ext4_extent_idx*)(header+1);
+        uint64_t block_size = ext4_info.block_size;
+        std::vector<char> buf(block_size);
+
+        for (uint16_t i = 0; i < header->eh_entries; i++) {
+            uint64_t extent_phys_block = get_extent_idx_phys_block(indices[i]);
+            uint64_t offset = get_block_offset(extent_phys_block, block_size);
+
+            if (!read_bytes(ext4_info.image, offset, buf.data(), block_size)) {
+                std::cerr << "error on read_bytes() in read_leaf_extents()\n";
+                return false;
+            }
+
+            // todos os nós contém um header, o primeiro byte do dó recém-lido é o início de seu header
+            if (!read_leaf_extents(ext4_info, (ext4_extent_header*)buf.data(), leaf_extents)) {
+                std::cerr << "error on read_leaf_extents() in read_leaf_extents()\n";
+                return false;
+            };
+        }
+    }
+
+    return true;
+}
 
 void print_superblock(const ext4_sb_info& ext4_info) {
     super_block sb = ext4_info.sb;
@@ -256,27 +332,28 @@ void print_inode(const inode& inode, uint32_t inode_num) {
     std::cout << std::setw(w) << "i_projid:" << inode.i_projid << "\n";
 }
 
-ext4_sb_info init(std::fstream& image, const super_block& sb) {
-    uint64_t block_size = get_block_size(sb);
-    uint64_t blocks_count = get_blocks_count(sb);
-    uint64_t num_groups = get_num_groups(sb);
-    uint16_t desc_size = sb.s_desc_size;
-    uint64_t gdt_offset = ((block_size == 1024) ? 2 : 1) * block_size;
-
-    ext4_sb_info ext4_info {
-        image,
-        sb,
-        {},
-        block_size,
-        blocks_count,
-        num_groups,
-        desc_size,
-        gdt_offset
-    };
+bool init_ext4(const std::string& img_path, ext4_sb_info& ext4_info) {
+    if (!open_image(img_path, ext4_info.image)) {
+        std::cerr << "error on open_image() in init_ext4()";
+        
+        return false;
+    }
     
-    if (!read_gdt(ext4_info)) {
-        std::cerr << "error on read_gdt() in init() \n";
+    if (!read_superblock(ext4_info.image, ext4_info.sb)) {
+        std::cerr << "error on read_superblock() in init_ext4()";
+        
+        return false;
     }
 
-    return ext4_info;
+    ext4_info.block_size = get_block_size(ext4_info.sb);
+    ext4_info.blocks_count = get_blocks_count(ext4_info.sb);
+    ext4_info.num_groups = get_num_groups(ext4_info.sb);
+    ext4_info.desc_size = ext4_info.sb.s_desc_size;
+    ext4_info.gdt_offset = ((ext4_info.block_size == 1024) ? 2 : 1) * ext4_info.block_size;
+    
+    if (!read_gdt(ext4_info)) {
+        std::cerr << "error on read_gdt() in init_ext4() \n";
+    }
+
+    return true;
 }

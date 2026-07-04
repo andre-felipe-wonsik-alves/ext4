@@ -124,9 +124,7 @@ struct super_block
     uint32_t s_reserved[93];
     uint32_t s_checksum;
 };
-#pragma pack(pop)
 
-#pragma pack(push, 1)
 struct group_description
 {
     uint32_t bg_block_bitmap_lo;
@@ -154,9 +152,7 @@ struct group_description
     uint16_t bg_inode_bitmap_csum_hi;
     uint32_t bg_reserved;
 };
-#pragma pack(pop)
 
-#pragma pack(push, 1)
 struct inode
 {
     uint16_t i_mode;
@@ -264,7 +260,7 @@ struct ext4_dir_entry_2 {
 
 struct ext4_sb_info
 {
-    std::fstream& image;
+    std::fstream image;
     super_block sb;
     std::vector<group_description> gdt;
 
