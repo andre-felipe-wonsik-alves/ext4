@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <fstream>
 
 /*
 Todos os campos das estruturas foram baseadas na documentação em:
@@ -123,9 +124,7 @@ struct super_block
     uint32_t s_reserved[93];
     uint32_t s_checksum;
 };
-#pragma pack(pop)
 
-#pragma pack(push, 1)
 struct group_description
 {
     uint32_t bg_block_bitmap_lo;
@@ -153,9 +152,7 @@ struct group_description
     uint16_t bg_inode_bitmap_csum_hi;
     uint32_t bg_reserved;
 };
-#pragma pack(pop)
 
-#pragma pack(push, 1)
 struct inode
 {
     uint16_t i_mode;
@@ -170,7 +167,6 @@ struct inode
     uint32_t i_blocks_lo;
     uint32_t i_flags;
 
-    // marcador union indica que eles compartilharão o mesmo espaço de memória
     union
     {
         struct
@@ -214,7 +210,7 @@ struct inode
         } hurd2;
         struct
         {
-            uint16_t h_i_reserved1;
+            uint16_t m_i_reserved1;
             uint16_t m_i_file_acl_high;
             uint32_t m_i_reserved2[2];
         } masix2;
@@ -229,5 +225,35 @@ struct inode
     uint32_t i_crtime_extra;
     uint32_t i_version_hi;
     uint32_t i_projid;
+};
+
+struct ext4_extent_header {
+    uint16_t eh_magic;
+    uint16_t eh_entries;
+    uint16_t eh_max;
+    uint16_t eh_depth;
+    uint32_t eh_generation;
+};
+
+struct ext4_extent_idx {
+    uint32_t ei_block;
+    uint32_t ei_leaf_lo;
+    uint16_t ei_leaf_hi;
+    uint16_t ei_unused;
+};
+
+struct ext4_extent {
+    uint32_t ee_block;
+    uint16_t ee_len;
+    uint16_t ee_start_hi;
+    uint32_t ee_start_lo;
+};
+
+struct ext4_dir_entry_2 {
+    uint32_t inode;
+    uint16_t rec_len;
+    uint8_t name_len;
+    uint8_t file_type;
+    char name[255];
 };
 #pragma pack(pop)
