@@ -1,27 +1,17 @@
 #include "ext4_shell.h"
-#include "ext4_utils.h"
-#include "io_utils.h"
 #include <iostream>
 #include <string>
-#include <vector>
 
 int main(int argc, char *argv[]) {
   if (argc < 2) {
-    std::cerr << "Uso: " << argv[0] << " <path_to_imdg>\n";
+    std::cerr << "Uso: " << argv[0] << " <path_to_img>\n";
     return 1;
   }
 
   std::string img_path = argv[1];
 
-  Ext4FS fs;
-
-  if (!fs.init(img_path)) {
-    std::cerr << "error on fs.init() in main()\n";
-    return 1;
-  }
-
-  // criando shell e rodando
-  Ext4Shell shell;
+  // O Ext4Shell inicializa o Ext4FS internamente a partir do caminho da imagem
+  Ext4Shell shell(img_path);
   shell.run();
 
   // DEBUGGING/TESTES
