@@ -1,3 +1,11 @@
+/**
+ * Classe Ext4FS — interface para leitura e navegação em imagens ext4.
+ *
+ * Encapsula toda a lógica de parsing do sistema de arquivos: leitura do
+ * superbloco, da Group Descriptor Table (GDT), de inodes, do conteúdo de
+ * arquivos e diretórios via extent tree.
+ */
+
 #ifndef EXT4_UTILS_H
 #define EXT4_UTILS_H
 
@@ -9,15 +17,15 @@
 
 class Ext4FS {
 private:
-    std::fstream image;
-    super_block sb;
-    std::vector<group_description> gdt;
+    std::fstream image; // Arquivo de imagem aberto em modo binário
+    super_block sb; // Superbloco lido da imagem
+    std::vector<group_description> gdt; // Group Descriptor Table completa
 
-    uint64_t block_size;
-    uint64_t blocks_count;
-    uint64_t num_groups;
-    uint16_t desc_size;
-    uint64_t gdt_offset;
+    uint64_t block_size; // Tamanho de bloco em bytes, calculado a partir de s_log_block_size
+    uint64_t blocks_count; // Total de blocos do SA
+    uint64_t num_groups; // Número de grupos de blocos
+    uint16_t desc_size; // Tamanho de cada group descriptor em bytes (32 ou 64)
+    uint64_t gdt_offset; // Offset em bytes da GDT na imagem
 
     /**
      * Lê o superbloco de uma imagem de um SA ext4
@@ -64,7 +72,7 @@ public:
 
     /**
      * Lê todo o conteúdo em uma extent tree
-     * @param header: objeto ext4_extent_header raiz da extent tere
+     * @param header: objeto ext4_extent_header raiz da extent tree
      * @param leaf_extents: vetor de objetos ext4_extents onde os extents lidos serão armazenados
      * @returns bool se os extents forem lidos com sucesso; false caso contrário
      */
@@ -72,14 +80,14 @@ public:
 
     /**
      * Busca o número do inode correspondente a um caminho de arquivo
-     * @param path: o caminho a ser buscado (relativo/asboltuo)
-     * @param inode_num: o inode inicial para busca. Se não informado, inode_num = 2 
+     * @param path: o caminho a ser buscado (relativo/absoluto)
+     * @param inode_num: o inode inicial para busca. Se não informado, inode_num = 2 (raiz)
      * @returns o número do inode encontrado; 0 caso contrário
      */
     uint32_t find_inode_by_path(const std::string& path, uint32_t inode_num = 2);
     
     /**
-     * Busca o inode a partri de um dir_entry
+     * Busca o inode a partir de um dir_entry
      * @param dir_content: o vetor de bytes contendo os blocos do diretório lido
      * @param file_name: o nome do arquivo sendo buscado
      * @returns o número do inode do arquivo buscado; ou 0 caso não seja encontrado
@@ -87,12 +95,12 @@ public:
     uint32_t find_inode_by_dir(const std::vector<char>& dir_content, const std::string& file_name);
 
     /**
-     * Imprime um superbloco
+     * Imprime todos os campos do superbloco na saída padrão.
      */
     void print_superblock() const;
 
     /**
-     * Imprime uma GDT
+     * Imprime todos os campos de cada group descriptor da GDT na saída padrão.
      */
     void print_gdt() const;
 
@@ -112,11 +120,35 @@ public:
     }
 
     /**
-     * Retorna a quantidade de blocos em umx' SA
+     * Retorna a quantidade de blocos em um SA
      * @returns s_blocks_count_hi << 32 | s_blocks_count_lo
      */
     inline uint64_t get_blocks_count() const {
         return (static_cast<uint64_t>(sb.s_blocks_count_hi) << 32) | sb.s_blocks_count_lo;
+    }
+
+    /**
+     * Retorna a quantidade de blocos livres em um SA
+     * @returns s_free_blocks_count_hi << 32 | s_free_blocks_count_lo
+     */
+    inline uint64_t get_free_blocks_count() const {
+        return (static_cast<uint64_t>(sb.s_free_blocks_count_hi) << 32) | sb.s_free_blocks_count_lo;
+    }
+
+    /**
+     * Retorna a quantidade de inodes em um SA
+     * @returns s_inodes_count
+     */
+    inline uint32_t get_inodes_count() const {
+        return sb.s_inodes_count;
+    }
+
+    /**
+     * Retorna a quantidade de inodes livres em um SA
+     * @returns s_free_inodes_count
+     */
+    inline uint32_t get_free_inodes_count() const {
+        return sb.s_free_inodes_count;
     }
 
     /**
@@ -156,7 +188,7 @@ public:
     }
 
     /**
-     * Retorna o bloco inicial da tabela de inodes de um grupo de blocas
+     * Retorna o bloco inicial da tabela de inodes de um grupo de blocos
      * @param bg: número do grupo de blocos
      * @returns bg_inode_table_hi << 32 | bg_inode_table_lo
      */
