@@ -213,6 +213,44 @@ uint32_t Ext4FS::find_inode_by_dir(const std::vector<char> &dir_content,
   return 0;
 }
 
+bool Ext4FS::inode_is_used(uint32_t inode_num) {
+  if (inode_num == 0 || inode_num > sb.s_inodes_count) {
+    std::cerr << "invalid inode given to inode_is_used()\n";
+    return false;
+  }
+
+  uint32_t bg = get_inode_block_group(inode_num);
+  uint64_t bitmap_block = get_inode_bitmap_block(bg);
+  uint64_t offset = get_block_offset(bitmap_block);
+  std::vector<char> bitmap(block_size);
+  uint32_t inode_bit = (inode_num - 1) % sb.s_inodes_per_group;
+  
+  if (!read_bytes(image, offset, bitmap.data(), block_size)) {
+    return false;
+  }
+
+  return test_bit(bitmap, inode_bit);
+}
+
+bool Ext4FS::block_is_used(uint64_t block_num){
+ if (block_num < sb.s_first_data_block || block_num >= blocks_count) {
+    std::cerr << "invalid block given to block_is_used()\n";
+    return false;
+  }
+
+  uint32_t bg = get_inode_block_group(block_num);
+  uint64_t bitmap_block = get_block_bitmap_block(bg);
+  uint64_t offset = get_block_offset(bitmap_block);
+  std::vector<char> bitmap(block_size);
+  uint32_t block_bit = (block_num - 1) % sb.s_inodes_per_group;
+  
+  if (!read_bytes(image, offset, bitmap.data(), block_size)) {
+    return false;
+  }
+
+  return test_bit(bitmap, block_bit);
+}
+
 void Ext4FS::print_superblock() const {
   const int w = 30;
   std::cout << std::left << std::setfill(' ');
