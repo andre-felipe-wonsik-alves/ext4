@@ -147,8 +147,8 @@ public:
      * @param block: número do bloco
      * @returns block * block_size
      */
-    inline uint64_t get_block_offset(uint64_t block) const {
-        return block * block_size;
+    inline uint64_t get_block_offset(uint64_t block_num) const {
+        return block_num * block_size;
     }
 
     /**
@@ -258,15 +258,37 @@ public:
     }
 
     /**
-     * Verifica se um bit estespecíficoá ativo em um mapa de bits
+     * Verifica se um bit está ativo em um mapa de bits
      * @param bitmap: vetor contendo o bitmap
-     * @param bit: o bit a ser validado
+     * @param bit_offset: offset do bit a ser validado
      * @returns true se o bit for 1; false caso contrário
      */    
     inline bool test_bit(const std::vector<char>& bitmap, uint32_t bit_offset) const {
         uint32_t byte_idx = bit_offset / 8;
         uint32_t bit_idx = bit_offset % 8;
         return (bitmap[byte_idx] & (1 << bit_idx)) != 0;
+    }
+
+    /**
+     * Ativa um bit em um mapa de bits
+     * @param bitmap: vetor contendo o bitmap
+     * @param bit_offset: offset do bit a ser ativado
+     */    
+    inline void set_bit(std::vector<char>& bitmap, uint32_t bit_offset) const {
+        uint32_t byte_idx = bit_offset / 8;
+        uint32_t bit_idx = bit_offset % 8;
+        bitmap[byte_idx] |= (1 << bit_idx);
+    }
+
+    /**
+     * Limpa um bit em um mapa de bits
+     * @param bitmap: vetor contendo o bitmap
+     * @param bit_offset: offset do bit a ser limpo
+     */       
+    inline void clear_bit(std::vector<char>& bitmap, uint32_t bit_offset) const {
+        uint32_t byte_idx = bit_offset / 8;
+        uint32_t bit_idx = bit_offset % 8;
+        bitmap[byte_idx] &= ~(1 << bit_idx);
     }
 };
 
