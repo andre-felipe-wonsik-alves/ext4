@@ -160,6 +160,10 @@ public:
         return (inode_num - 1) / sb.s_inodes_per_group;
     }
 
+    inline uint32_t get_block_block_group(uint64_t block_num) const {
+        return (block_num - sb.s_first_data_block) / sb.s_blocks_per_group;
+    }
+
     /**
      * Retorna o índice de um inode no seu respectivo grupo de blocos
      * @param inode_num: número do inode
@@ -235,15 +239,33 @@ public:
         return (static_cast<uint64_t>(gd.bg_block_bitmap_hi) << 32) | gd.bg_block_bitmap_lo;
     }
 
+     /**
+     * Retorna o offset do bit que representa um inode no mapa de bits de inodes
+     * @param inode_num: número do inode
+     * @returns (inode_num - 1) % s_inodes_per_group;
+     */
+    inline uint32_t get_inode_bitmap_offset(uint32_t inode_num) const {
+        return (inode_num - 1) % sb.s_inodes_per_group;
+    }
+
+    /**
+     * Retorna o offset do bit que representa um bloco no mapade bits de blocos
+     * @param block_num: número do bloco
+     * @returns (block_num - s_first_data_block) % s_blocks_per_group
+     */
+    inline uint32_t get_block_bitmap_offset(uint64_t block_num) const {
+        return (block_num - sb.s_first_data_block) % sb.s_blocks_per_group;
+    }
+
     /**
      * Verifica se um bit estespecíficoá ativo em um mapa de bits
      * @param bitmap: vetor contendo o bitmap
      * @param bit: o bit a ser validado
      * @returns true se o bit for 1; false caso contrário
      */    
-    inline bool test_bit(const std::vector<char>& bitmap, uint32_t bit) const {
-        uint32_t byte_idx = bit / 8;
-        uint32_t bit_idx = bit % 8;
+    inline bool test_bit(const std::vector<char>& bitmap, uint32_t bit_offset) const {
+        uint32_t byte_idx = bit_offset / 8;
+        uint32_t bit_idx = bit_offset % 8;
         return (bitmap[byte_idx] & (1 << bit_idx)) != 0;
     }
 };

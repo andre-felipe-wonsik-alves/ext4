@@ -194,6 +194,10 @@ uint32_t Ext4FS::find_inode_by_dir(const std::vector<char> &dir_content,
 
   while (offset < dir_content.size()) {
     ext4_dir_entry_2 *dir_entry = (ext4_dir_entry_2 *)(&dir_content[offset]);
+    
+    if (dir_entry->rec_len == 0) {
+      break;
+    }
 
     if (dir_entry->inode != 0) {
       std::string dir_entry_name(dir_entry->name, dir_entry->name_len);
@@ -201,10 +205,6 @@ uint32_t Ext4FS::find_inode_by_dir(const std::vector<char> &dir_content,
       if (dir_entry_name == file_name) {
         return dir_entry->inode;
       }
-    }
-
-    if (dir_entry->rec_len == 0) {
-      break;
     }
 
     offset += dir_entry->rec_len;
@@ -223,13 +223,13 @@ bool Ext4FS::inode_is_used(uint32_t inode_num) {
   uint64_t bitmap_block = get_inode_bitmap_block(bg);
   uint64_t offset = get_block_offset(bitmap_block);
   std::vector<char> bitmap(block_size);
-  uint32_t inode_bit = (inode_num - 1) % sb.s_inodes_per_group;
+  uint32_t inode_bit_offset = get_inode_bitmap_offset(inode_num);
   
   if (!read_bytes(image, offset, bitmap.data(), block_size)) {
     return false;
   }
 
-  return test_bit(bitmap, inode_bit);
+  return test_bit(bitmap, inode_bit_offset);
 }
 
 bool Ext4FS::block_is_used(uint64_t block_num){
@@ -238,17 +238,17 @@ bool Ext4FS::block_is_used(uint64_t block_num){
     return false;
   }
 
-  uint32_t bg = get_inode_block_group(block_num);
+  uint32_t bg = get_block_block_group(block_num);
   uint64_t bitmap_block = get_block_bitmap_block(bg);
   uint64_t offset = get_block_offset(bitmap_block);
   std::vector<char> bitmap(block_size);
-  uint32_t block_bit = (block_num - 1) % sb.s_inodes_per_group;
+  uint32_t block_bit_offset = get_block_bitmap_offset(block_num);
   
   if (!read_bytes(image, offset, bitmap.data(), block_size)) {
     return false;
   }
 
-  return test_bit(bitmap, block_bit);
+  return test_bit(bitmap, block_bit_offset);
 }
 
 void Ext4FS::print_superblock() const {
