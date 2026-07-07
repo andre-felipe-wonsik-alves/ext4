@@ -119,6 +119,24 @@ Ext4Shell::Ext4Shell(const std::string &img_path)
           return;
         }
         ext4_import(args[0], args[1]); });
+
+  commandsMap.emplace(
+      "ialloc",
+      [this](const std::vector<std::string> &) -> void
+      { ialloc(); });
+
+  commandsMap.emplace(
+      "balloc", [this](const std::vector<std::string> &args) -> void
+      {
+        uint64_t count = 1;
+        if (!args.empty()) {
+          try {
+            count = std::stoull(args[0]);
+          } catch (const std::exception &) {
+            std::cout << "[!] Argumento inválido para balloc; usando count=1\n";
+          }
+        }
+        balloc(count); });
 }
 
 // run: loop principal — lê input, tokeniza e despacha para o comando correto
@@ -544,4 +562,41 @@ void Ext4Shell::ext4_import(const std::string &source,
   }
   std::cout << "[!] ext4_import() não implementado. (Origem: " << source
             << " -> Destino: " << target << ")\n";
+}
+
+// ialloc: aloca um inode livre e exibe o número alocado
+void Ext4Shell::ialloc()
+{
+  uint32_t inode_num = fs.alloc_inode();
+  if (inode_num == 0)
+  {
+    std::cout << "[!] Não foi possível alocar um inode livre\n";
+    return;
+  }
+  std::cout << "[*] Inode alocado: " << inode_num << "\n";
+}
+
+// balloc: aloca count blocos livres e exibe os números alocados
+void Ext4Shell::balloc(uint64_t count)
+{
+  if (count == 0)
+  {
+    std::cout << "[!] Count deve ser maior que 0\n";
+    return;
+  }
+
+  uint64_t allocated_count = 0;
+  uint64_t first_block = fs.alloc_blocks(count, allocated_count);
+
+  if (first_block == 0)
+  {
+    std::cout << "[!] Não foi possível alocar blocos livres\n";
+    return;
+  }
+
+  std::cout << "[*] " << allocated_count << " bloco(s) alocado(s) a partir do bloco " << first_block << "\n";
+  for (uint64_t k = 0; k < allocated_count; k++)
+  {
+    std::cout << "    " << first_block + k << "\n";
+  }
 }

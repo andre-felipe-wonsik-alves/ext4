@@ -105,6 +105,18 @@ private:
     void ext4_import(const std::string &source, const std::string &target);
 
     /**
+     * Aloca um inode livre no SA e exibe o número do inode alocado.
+     */
+    void ialloc();
+
+    /**
+     * Aloca um ou mais blocos livres no SA e exibe os números alocados.
+     *
+     * @param count quantidade de blocos a alocar (default: 1)
+     */
+    void balloc(uint64_t count = 1);
+
+    /**
      * Despacha a entrada do usuário para o comando correto.
      * O primeiro token é o nome do comando; os demais são os argumentos.
      *

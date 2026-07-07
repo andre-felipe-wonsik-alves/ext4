@@ -28,7 +28,7 @@ bool read_bytes(std::fstream& image, uint64_t offset, void* buf, size_t n) {
 
 bool write_bytes(std::fstream& image, uint64_t offset, void* buf, size_t n) {
     // Posiciona o cursor de escrita no offset absoluto desejado
-    image.seekg(offset, std::ios::beg);
+    image.seekp(offset, std::ios::beg);
     
     if (image.fail()) {
         return false;
@@ -37,7 +37,14 @@ bool write_bytes(std::fstream& image, uint64_t offset, void* buf, size_t n) {
     // Escreve n bytes do buffer na imagem; cast necessário pois write() exige char*
     image.write(static_cast<char*>(buf), n);
 
-    return true;
+    if (!image.good()) {
+        return false;
+    }
+
+    // Garante que os dados saiam do buffer do runtime e cheguem ao SO
+    image.flush();
+
+    return image.good();
 }
 
 std::vector<std::string> split_tokens(const std::string& str, char delimiter) {
