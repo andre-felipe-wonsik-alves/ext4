@@ -1,9 +1,14 @@
+/**
+ * Implementação da classe Ext4FS — parsing e navegação em imagens ext4.
+ */
+
 #include "ext4_utils.h"
 #include "io_utils.h"
 #include <iomanip>
 #include <iostream>
 #include <string_view>
 
+// init: abre a imagem e inicializa todos os metadados do SA
 bool Ext4FS::init(const std::string &img_path) {
   if (!open_image(img_path, image)) {
     std::cerr << "error on open_image() in init()\n";
@@ -15,10 +20,19 @@ bool Ext4FS::init(const std::string &img_path) {
     return false;
   }
 
+  // Calcula os atributos derivados do superbloco para uso frequente
   block_size = get_block_size();
   blocks_count = get_blocks_count();
   num_groups = get_num_groups();
   desc_size = sb.s_desc_size;
+
+/**
+ * A GDT fica no bloco imediatamente após o superbloco.
+ * Se block_size == 1024, o superbloco ocupa o bloco 1 (offset 1024),
+ * então a GDT começa no bloco 2 (offset 2048).
+ * Se block_size > 1024, o superbloco está dentro do bloco 0,
+ * e a GDT começa no bloco 1 (offset = block_size).
+ */
   gdt_offset = ((block_size == 1024) ? 2 : 1) * block_size;
 
   if (!read_gdt()) {
@@ -29,7 +43,9 @@ bool Ext4FS::init(const std::string &img_path) {
   return true;
 }
 
+// read_superblock: lê os 1024 bytes do superbloco no offset fixo 1024
 bool Ext4FS::read_superblock() {
+  // O superbloco do ext4 sempre reside no offset 1024 bytes da partição */
   if (!read_bytes(image, 1024, &sb, sizeof(super_block))) {
     return false;
   }
@@ -37,12 +53,18 @@ bool Ext4FS::read_superblock() {
   return true;
 }
 
+// read_gdt: lê todos os group descriptors da Group Descriptor Table
 bool Ext4FS::read_gdt() {
+/**
+ * Se s_desc_size for 0 (SA sem a feature 64bit), cada descriptor tem 32 bytes.
+ * Com a feature 64bit ativa, s_desc_size geralmente é 64.
+ */
   uint16_t current_desc_size = sb.s_desc_size == 0 ? 32 : sb.s_desc_size;
   uint64_t offset = gdt_offset;
 
+  // Lê cada group descriptor e armazena no vetor gdt
   for (uint64_t i = 0; i < num_groups; i++) {
-    group_description gd{};
+    group_description gd{}; 
 
     if (!read_bytes(image, offset, &gd, current_desc_size)) {
       return false;
@@ -50,30 +72,44 @@ bool Ext4FS::read_gdt() {
 
     gdt.push_back(gd);
 
+    // Avança o offset para o próximo descriptor
     offset += current_desc_size;
   }
 
   return true;
 }
 
-bool Ext4FS::read_inode(uint32_t inode_num, inode &inode) {
+// read_inode: localiza e lê um inode específico pelo seu número
+bool Ext4FS::read_inode(uint32_t inode_num, inode &inode_out) {
+  // Inode 0 não existe; inodes válidos começam em 1 
   if (inode_num == 0 || inode_num > sb.s_inodes_count) {
     return false;
   }
 
+/**
+ * Localização do inode no disco:
+ *   1. Determinar em qual grupo de blocos o inode reside
+ *   2. Determinar o índice do inode dentro desse grupo
+ *   3. Calcular o offset absoluto na tabela de inodes do grupo
+*/
   uint32_t bg = get_inode_block_group(inode_num);
   uint32_t index = get_inode_index(inode_num);
 
   uint64_t inode_offset = index * sb.s_inode_size;
   uint64_t inode_table_block = get_inode_table_block(bg);
-
   uint64_t block_offset = get_block_offset(inode_table_block) + inode_offset;
 
-  return read_bytes(image, block_offset, &inode, sizeof(inode));
+  return read_bytes(image, block_offset, &inode_out, sizeof(inode_out));
 }
 
-std::vector<char> Ext4FS::read_inode_content(const inode &inode) {
-  ext4_extent_header *header = (ext4_extent_header *)inode.i_block;
+// read_inode_content: lê o conteúdo completo de um arquivo via extent tree
+std::vector<char> Ext4FS::read_inode_content(const inode &inode_in) {
+/**
+ * O campo i_block[] do inode contém a raiz da extent tree.
+ * Fazemos um cast direto para ext4_extent_header*, pois usamos #pragma pack(1)
+ * e os bytes estão contíguos.
+*/
+  ext4_extent_header *header = (ext4_extent_header *)inode_in.i_block;
   std::vector<ext4_extent> leaf_extents;
 
   if (!read_leaf_extents(header, leaf_extents)) {
@@ -81,10 +117,9 @@ std::vector<char> Ext4FS::read_inode_content(const inode &inode) {
     return {};
   }
 
-  uint64_t file_size = get_file_size(inode);
+  uint64_t file_size = get_file_size(inode_in);
   uint64_t rem_bytes = file_size;
-  std::vector<char>
-      inode_content; // i_block pode ser maior que file_size em algum momento?
+  std::vector<char> inode_content; // i_block pode ser maior que file_size em algum momento?
   inode_content.reserve(file_size);
 
   for (const auto &extent : leaf_extents) {
@@ -94,11 +129,15 @@ std::vector<char> Ext4FS::read_inode_content(const inode &inode) {
     uint64_t extent_phys_block = get_extent_phys_block(extent);
     uint64_t offset = get_block_offset(extent_phys_block);
 
-    // Compara-se o tamanho do extent com a quantidade de bytes a serem lidos
-    // para evitar ler lixo no último bloco
+    /**
+     * ee_len > 32768 indica um extent não-inicializado (uninitialized extent).
+     * O comprimento real em blocos é ee_len - 32768.
+     * Isso evita ler dados de blocos que foram alocados mas ainda não escritos.
+     * Compara-se com rem_bytes para não ler além do tamanho real do arquivo,
+     * evitando leitura do padding do último bloco.
+    */
     uint64_t extent_bytes =
-        (extent.ee_len <= 32768 ? extent.ee_len : extent.ee_len - 32768) *
-        block_size;
+        (extent.ee_len <= 32768 ? extent.ee_len : extent.ee_len - 32768) * block_size;
     uint64_t bytes = extent_bytes < rem_bytes ? extent_bytes : rem_bytes;
     std::vector<char> buf(bytes);
 
@@ -117,19 +156,27 @@ std::vector<char> Ext4FS::read_inode_content(const inode &inode) {
   return inode_content;
 }
 
+// read_leaf_extents: percorre recursivamente a extent tree coletando folhas
 bool Ext4FS::read_leaf_extents(const ext4_extent_header *header,
                                std::vector<ext4_extent> &leaf_extents) {
-  // caso base é encontrar uma folha e colocá-la no vetor de folhas
   if (header->eh_depth == 0) {
+    /**
+     * Caso base: nó folha.
+     * Logo após o header estão eh_entries structs ext4_extent contíguos.
+     * Adicionamos cada extent ao vetor de folhas.
+     */
     ext4_extent *extents = (ext4_extent *)(header + 1);
 
     for (uint16_t i = 0; i < header->eh_entries; i++) {
       leaf_extents.push_back(extents[i]);
     }
-  }
-  // caso contrário, é necessário percorrer os índices na árvore até encontrar
-  // outras folhas
-  else {
+  } else {
+    /**
+     * Caso recursivo: nó interno (índice).
+     * Logo após o header estão eh_entries structs ext4_extent_idx.
+     * Cada índice aponta para um bloco físico que contém outro nó da árvore.
+     * Lemos esse bloco e recursamos nele.
+     */
     ext4_extent_idx *indices = (ext4_extent_idx *)(header + 1);
     std::vector<char> buf(block_size);
 
@@ -142,8 +189,7 @@ bool Ext4FS::read_leaf_extents(const ext4_extent_header *header,
         return false;
       }
 
-      // todos os nós contém um header, o primeiro byte do dó recém-lido é o
-      // início de seu header
+      // O primeiro byte do bloco lido é o início do header do nó filho
       if (!read_leaf_extents((ext4_extent_header *)buf.data(), leaf_extents)) {
         std::cerr << "error on read_leaf_extents() in read_leaf_extents()\n";
         return false;
@@ -154,25 +200,31 @@ bool Ext4FS::read_leaf_extents(const ext4_extent_header *header,
   return true;
 }
 
+// find_inode_by_path: resolve um caminho para um número de inode
 uint32_t Ext4FS::find_inode_by_path(const std::string &path,
                                     uint32_t inode_num) {
   if (path.empty()) {
     return inode_num;
   }
 
+  // Caminho "/" resolve direto para o inode raiz (sempre inode 2 no ext4)
   if (path == "/") {
     return 2;
   }
 
   inode curr_inode;
   uint32_t curr_inode_num = inode_num;
+
+  // Divide o caminho em componentes: "a/b/c" -> {"a", "b", "c"}
   std::vector<std::string> tokens = split_tokens(path);
 
+  // Percorre cada componente do caminho, descendo um nível por iteração
   for (size_t i = 0; i < tokens.size(); i++) {
     if (!read_inode(curr_inode_num, curr_inode)) {
       return 0;
     }
 
+    // Cada componente intermediário deve ser um diretório
     if (!inode_is_dir(curr_inode)) {
       return 0;
     }
@@ -188,10 +240,16 @@ uint32_t Ext4FS::find_inode_by_path(const std::string &path,
   return curr_inode_num;
 }
 
+// find_inode_by_dir: busca uma entrada de diretório pelo nome
 uint32_t Ext4FS::find_inode_by_dir(const std::vector<char> &dir_content,
                                    const std::string &file_name) {
   size_t offset = 0;
 
+  /**
+   * Varre as entradas de diretório sequencialmente.
+   * Cada entrada tem tamanho variável; rec_len indica quantos bytes pular
+   * para chegar na próxima entrada.
+   */
   while (offset < dir_content.size()) {
     ext4_dir_entry_2 *dir_entry = (ext4_dir_entry_2 *)(&dir_content[offset]);
     
@@ -200,11 +258,17 @@ uint32_t Ext4FS::find_inode_by_dir(const std::vector<char> &dir_content,
     }
 
     if (dir_entry->inode != 0) {
+      // name NÃO é null-terminated: usar name_len para construir a string
       std::string dir_entry_name(dir_entry->name, dir_entry->name_len);
 
       if (dir_entry_name == file_name) {
         return dir_entry->inode;
       }
+    }
+
+    // rec_len == 0 indica corrupção ou fim antecipado do diretório
+    if (dir_entry->rec_len == 0) {
+      break;
     }
 
     offset += dir_entry->rec_len;
@@ -458,6 +522,7 @@ void Ext4FS::print_superblock() const {
             << sb.s_checksum << std::dec << "\n";
 }
 
+// print_gdt: imprime todos os group descriptors da GDT na saída padrão
 void Ext4FS::print_gdt() const {
   const int w = 30;
   std::cout << std::left << std::setfill(' ');
@@ -520,94 +585,96 @@ void Ext4FS::print_gdt() const {
   }
 }
 
-void Ext4FS::print_inode(const inode &inode, uint32_t /*inode_num*/) const {
+// print_inode: imprime todos os campos de um inode na saída padrão
+void Ext4FS::print_inode(const inode &inode_in, uint32_t /*inode_num*/) const {
   const int w = 30;
   std::cout << std::left << std::setfill(' ');
 
-  std::cout << std::setw(w) << "i_mode:" << "0x" << std::hex << inode.i_mode
+  std::cout << std::setw(w) << "i_mode:" << "0x" << std::hex << inode_in.i_mode
             << std::dec << "\n";
-  std::cout << std::setw(w) << "i_uid:" << inode.i_uid << "\n";
-  std::cout << std::setw(w) << "i_size_lo:" << inode.i_size_lo << "\n";
-  std::cout << std::setw(w) << "i_atime:" << inode.i_atime << "\n";
-  std::cout << std::setw(w) << "i_ctime:" << inode.i_ctime << "\n";
-  std::cout << std::setw(w) << "i_mtime:" << inode.i_mtime << "\n";
-  std::cout << std::setw(w) << "i_dtime:" << inode.i_dtime << "\n";
-  std::cout << std::setw(w) << "i_gid:" << inode.i_gid << "\n";
-  std::cout << std::setw(w) << "i_links_count:" << inode.i_links_count
+  std::cout << std::setw(w) << "i_uid:" << inode_in.i_uid << "\n";
+  std::cout << std::setw(w) << "i_size_lo:" << inode_in.i_size_lo << "\n";
+  std::cout << std::setw(w) << "i_atime:" << inode_in.i_atime << "\n";
+  std::cout << std::setw(w) << "i_ctime:" << inode_in.i_ctime << "\n";
+  std::cout << std::setw(w) << "i_mtime:" << inode_in.i_mtime << "\n";
+  std::cout << std::setw(w) << "i_dtime:" << inode_in.i_dtime << "\n";
+  std::cout << std::setw(w) << "i_gid:" << inode_in.i_gid << "\n";
+  std::cout << std::setw(w) << "i_links_count:" << inode_in.i_links_count
             << "\n";
-  std::cout << std::setw(w) << "i_blocks_lo:" << inode.i_blocks_lo << "\n";
+  std::cout << std::setw(w) << "i_blocks_lo:" << inode_in.i_blocks_lo << "\n";
   std::cout << std::setw(w) << "i_flags:" << "0x" << std::hex
-            << inode.i_flags << std::dec << "\n";
+            << inode_in.i_flags << std::dec << "\n";
 
   std::cout << std::setw(w)
-            << "l_i_version:" << inode.osd1.linux1.l_i_version << "\n";
+            << "l_i_version:" << inode_in.osd1.linux1.l_i_version << "\n";
 
   std::cout << std::setw(w)
-            << "h_i_translator:" << inode.osd1.hurd1.h_i_translator << "\n";
+            << "h_i_translator:" << inode_in.osd1.hurd1.h_i_translator << "\n";
 
   std::cout << std::setw(w)
-            << "m_i_reserved1:" << inode.osd1.masix1.m_i_reserved1 << "\n";
+            << "m_i_reserved1:" << inode_in.osd1.masix1.m_i_reserved1 << "\n";
 
+  // i_block contém a extent tree inline; imprime os valores brutos
   std::cout << std::setw(w) << "i_block:" << "\n";
   for (int i = 0; i < 15; i++) {
-    std::cout << inode.i_block[i];
+    std::cout << inode_in.i_block[i];
   }
   std::cout << "\n";
 
-  std::cout << std::setw(w) << "i_generation:" << inode.i_generation << "\n";
-  std::cout << std::setw(w) << "i_file_acl_lo:" << inode.i_file_acl_lo
+  std::cout << std::setw(w) << "i_generation:" << inode_in.i_generation << "\n";
+  std::cout << std::setw(w) << "i_file_acl_lo:" << inode_in.i_file_acl_lo
             << "\n";
-  std::cout << std::setw(w) << "i_size_high:" << inode.i_size_high << "\n";
-  std::cout << std::setw(w) << "i_obso_faddr:" << inode.i_obso_faddr << "\n";
+  std::cout << std::setw(w) << "i_size_high:" << inode_in.i_size_high << "\n";
+  std::cout << std::setw(w) << "i_obso_faddr:" << inode_in.i_obso_faddr << "\n";
 
   std::cout << std::setw(w)
-            << "l_i_blocks_high:" << inode.osd2.linux2.l_i_blocks_high
+            << "l_i_blocks_high:" << inode_in.osd2.linux2.l_i_blocks_high
             << "\n";
   std::cout << std::setw(w)
-            << "l_i_file_acl_high:" << inode.osd2.linux2.l_i_file_acl_high
+            << "l_i_file_acl_high:" << inode_in.osd2.linux2.l_i_file_acl_high
             << "\n";
   std::cout << std::setw(w)
-            << "l_i_uid_high:" << inode.osd2.linux2.l_i_uid_high << "\n";
+            << "l_i_uid_high:" << inode_in.osd2.linux2.l_i_uid_high << "\n";
   std::cout << std::setw(w)
-            << "l_i_gid_high:" << inode.osd2.linux2.l_i_gid_high << "\n";
+            << "l_i_gid_high:" << inode_in.osd2.linux2.l_i_gid_high << "\n";
   std::cout << std::setw(w) << "l_i_checksum_lo:" << "0x" << std::hex
-            << inode.osd2.linux2.l_i_checksum_lo << std::dec << "\n";
+            << inode_in.osd2.linux2.l_i_checksum_lo << std::dec << "\n";
   std::cout << std::setw(w)
-            << "l_i_reserved:" << inode.osd2.linux2.l_i_reserved << "\n";
+            << "l_i_reserved:" << inode_in.osd2.linux2.l_i_reserved << "\n";
 
   std::cout << std::setw(w)
-            << "h_i_reserved1:" << inode.osd2.hurd2.h_i_reserved1 << "\n";
+            << "h_i_reserved1:" << inode_in.osd2.hurd2.h_i_reserved1 << "\n";
   std::cout << std::setw(w)
-            << "h_i_mode_high:" << inode.osd2.hurd2.h_i_mode_high << "\n";
+            << "h_i_mode_high:" << inode_in.osd2.hurd2.h_i_mode_high << "\n";
   std::cout << std::setw(w)
-            << "h_i_uid_high:" << inode.osd2.hurd2.h_i_uid_high << "\n";
+            << "h_i_uid_high:" << inode_in.osd2.hurd2.h_i_uid_high << "\n";
   std::cout << std::setw(w)
-            << "h_i_gid_high:" << inode.osd2.hurd2.h_i_gid_high << "\n";
-  std::cout << std::setw(w) << "h_i_author:" << inode.osd2.hurd2.h_i_author
+            << "h_i_gid_high:" << inode_in.osd2.hurd2.h_i_gid_high << "\n";
+  std::cout << std::setw(w) << "h_i_author:" << inode_in.osd2.hurd2.h_i_author
             << "\n";
 
   std::cout << std::setw(w)
-            << "m_i_reserved1:" << inode.osd2.masix2.m_i_reserved1 << "\n";
+            << "m_i_reserved1:" << inode_in.osd2.masix2.m_i_reserved1 << "\n";
   std::cout << std::setw(w)
-            << "m_i_file_acl_high:" << inode.osd2.masix2.m_i_file_acl_high
+            << "m_i_file_acl_high:" << inode_in.osd2.masix2.m_i_file_acl_high
             << "\n";
   std::cout << std::setw(w)
-            << "m_i_reserved2:" << inode.osd2.masix2.m_i_reserved2[0]
-            << inode.osd2.masix2.m_i_reserved2[1] << "\n";
+            << "m_i_reserved2:" << inode_in.osd2.masix2.m_i_reserved2[0]
+            << inode_in.osd2.masix2.m_i_reserved2[1] << "\n";
 
-  std::cout << std::setw(w) << "i_extra_isize:" << inode.i_extra_isize
+  std::cout << std::setw(w) << "i_extra_isize:" << inode_in.i_extra_isize
             << "\n";
   std::cout << std::setw(w) << "i_checksum_hi:" << "0x" << std::hex
-            << inode.i_checksum_hi << std::dec << "\n";
-  std::cout << std::setw(w) << "i_ctime_extra:" << inode.i_ctime_extra
+            << inode_in.i_checksum_hi << std::dec << "\n";
+  std::cout << std::setw(w) << "i_ctime_extra:" << inode_in.i_ctime_extra
             << "\n";
-  std::cout << std::setw(w) << "i_mtime_extra:" << inode.i_mtime_extra
+  std::cout << std::setw(w) << "i_mtime_extra:" << inode_in.i_mtime_extra
             << "\n";
-  std::cout << std::setw(w) << "i_atime_extra:" << inode.i_atime_extra
+  std::cout << std::setw(w) << "i_atime_extra:" << inode_in.i_atime_extra
             << "\n";
-  std::cout << std::setw(w) << "i_crtime:" << inode.i_crtime << "\n";
-  std::cout << std::setw(w) << "i_crtime_extra:" << inode.i_crtime_extra
+  std::cout << std::setw(w) << "i_crtime:" << inode_in.i_crtime << "\n";
+  std::cout << std::setw(w) << "i_crtime_extra:" << inode_in.i_crtime_extra
             << "\n";
-  std::cout << std::setw(w) << "i_version_hi:" << inode.i_version_hi << "\n";
-  std::cout << std::setw(w) << "i_projid:" << inode.i_projid << "\n";
+  std::cout << std::setw(w) << "i_version_hi:" << inode_in.i_version_hi << "\n";
+  std::cout << std::setw(w) << "i_projid:" << inode_in.i_projid << "\n";
 }

@@ -35,9 +35,9 @@ bool read_bytes(std::fstream& image, uint64_t offset, void* buf, size_t n);
 bool write_bytes(std::fstream& image, uint64_t offset, void* buf, size_t n);
 
 /**
- * Divide uma string em substrings cofnorme delimitador
+ * Divide uma string em substrings conforme delimitador
  * @param str: string
- * @param delimiter: delimitador. Por padraão. delimiter = '/'
+ * @param delimiter: delimitador. Por padrão. delimiter = '/'
  * @returns objeto std::vector<std::string> contendo as substrings separadas
  */
 std::vector<std::string> split_tokens(const std::string& str, char delimiter = '/');
