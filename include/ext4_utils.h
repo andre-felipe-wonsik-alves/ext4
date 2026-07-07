@@ -104,9 +104,36 @@ public:
     /**
      * Verifica se um bloco está sem uso
      * @param block_num: número do bloco
-     * @returns true se o inode estiver em uso; false caso contrário
+     * @returns true se o bloco estiver em uso; false caso contrário
      */
     bool block_is_used(uint64_t block_num);
+
+    /**
+     * Aloca o primeiro inode livre encontrado no SA.
+     * Percorre os grupos em ordem, lê o bitmap de inodes de cada grupo e
+     * marca o primeiro bit livre. Atualiza os contadores do GDT e do superbloco
+     * na imagem.
+     * @returns o número do inode alocado (>= 1), ou 0 em caso de falha
+     */
+    uint32_t alloc_inode();
+
+    /**
+     * Aloca o primeiro bloco de dados livre encontrado no SA.
+     * Percorre os grupos em ordem, lê o bitmap de blocos de cada grupo e
+     * marca o primeiro bit livre. Atualiza os contadores do GDT e do superbloco
+     * na imagem.
+     * @returns o número do bloco alocado (>= s_first_data_block), ou 0 em caso de falha
+     */
+    uint64_t alloc_block();
+
+    /**
+     * Aloca múltiplos blocos de dados livres contíguos (ou espalhados, se
+     * não houver espaço contíguo suficiente) no SA.
+     * Reusa alloc_block() para cada bloco requisitado.
+     * @param count: quantidade de blocos a alocar
+     * @returns vetor com os números dos blocos alocados; vazio em caso de falha
+     */
+    std::vector<uint64_t> alloc_blocks(uint64_t count);
 
     /**
      * Imprime todos os campos do superbloco na saída padrão.
