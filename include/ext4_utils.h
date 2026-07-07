@@ -131,6 +131,39 @@ public:
     uint64_t alloc_blocks(uint64_t count, uint64_t& allocated_count);
 
     /**
+     * Escreve um inode de volta na imagem, no offset correto da inode table.
+     * @param inode_num: número do inode (base 1)
+     * @param inode_in: objeto inode com os dados a serem gravados
+     * @returns true em caso de sucesso; false caso contrário
+     */
+    bool write_inode(uint32_t inode_num, const inode& inode_in);
+
+    /**
+     * Insere um novo extent na extent tree de um inode, atualizando o inode
+     * na imagem. Tenta primeiro estender (coalescer) o último extent existente
+     * se o novo bloco físico for contíguo. Caso contrário, insere um novo extent.
+     *
+     * Para a extent tree inline (depth == 0):
+     *   - Se há espaço (eh_entries < eh_max), insere diretamente em i_block.
+     *   - Se a tree inline está cheia, aloca um bloco externo, move os extents
+     *     inline para ele e converte i_block em um nó índice (depth = 1).
+     *
+     * A função NÃO aloca blocos de dados; o chamador deve ter alocado os blocos
+     * antes via alloc_blocks() e passar os números aqui.
+     *
+     * @param inode_num:    número do inode a ser atualizado
+     * @param inode_in:     inode lido; será atualizado em memória e na imagem
+     * @param logical_block: bloco lógico inicial do extent (ee_block)
+     * @param phys_block:    bloco físico inicial do extent (ee_start)
+     * @param len:           comprimento em blocos do extent (ee_len)
+     * @returns true em caso de sucesso; false caso contrário
+     */
+    bool write_extent_to_inode(uint32_t inode_num, inode& inode_in,
+                               uint32_t logical_block,
+                               uint64_t phys_block,
+                               uint16_t len);
+
+    /**
      * Imprime todos os campos do superbloco na saída padrão.
      */
     void print_superblock() const;
