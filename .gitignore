@@ -66,3 +66,6 @@ vcpkg_installed/
 Testing/
 .cache/
 resources/
+
+# images
+*.img
