@@ -315,6 +315,270 @@ bool Ext4FS::block_is_used(uint64_t block_num){
   return test_bit(bitmap, block_bit_offset);
 }
 
+// update_sb: persiste o superbloco em memória na imagem
+bool Ext4FS::update_sb() {
+  if (!write_bytes(image, 1024, &sb, sizeof(super_block))) {
+    std::cerr << "update_sb: erro ao escrever superbloco\n";
+    return false;
+  }
+  return true;
+}
+
+// update_gdt_entry: persiste um group descriptor em memória na imagem
+bool Ext4FS::update_gdt_entry(uint64_t bg) {
+  uint16_t current_desc_size = (sb.s_desc_size == 0) ? 32 : sb.s_desc_size; // 32 bytes se a feature 64bit não estiver ativa, 64 bytes caso contrário
+  uint64_t offset = get_gdt_entry_offset(bg);
+
+  if (!write_bytes(image, offset, &gdt[bg], current_desc_size)) {
+    std::cerr << "update_gdt_entry: erro ao escrever GDT entry do grupo " << bg << "\n";
+    return false;
+  }
+  return true;
+}
+
+// update_inode_bitmap: persiste o bitmap de inodes de um grupo na imagem
+bool Ext4FS::update_inode_bitmap(uint64_t bg, const std::vector<char>& bitmap) {
+  uint64_t bitmap_block = get_inode_bitmap_block(static_cast<uint32_t>(bg));
+  uint64_t offset = get_block_offset(bitmap_block);
+
+  if (!write_bytes(image, offset, const_cast<char*>(bitmap.data()), block_size)) {
+    std::cerr << "update_inode_bitmap: erro ao escrever bitmap do grupo " << bg << "\n";
+    return false;
+  }
+  return true;
+}
+
+// update_block_bitmap: persiste o bitmap de blocos de um grupo na imagem
+bool Ext4FS::update_block_bitmap(uint64_t bg, const std::vector<char>& bitmap) {
+  uint64_t bitmap_block = get_block_bitmap_block(static_cast<uint32_t>(bg));
+  uint64_t offset = get_block_offset(bitmap_block);
+
+  if (!write_bytes(image, offset, const_cast<char*>(bitmap.data()), block_size)) {
+    std::cerr << "update_block_bitmap: erro ao escrever bitmap do grupo " << bg << "\n";
+    return false;
+  }
+  return true;
+}
+
+// update_inode: persiste um inode na tabela de inodes do seu grupo na imagem
+bool Ext4FS::update_inode(uint32_t inode_num, const inode& inode_in) {
+  if (inode_num == 0 || inode_num > sb.s_inodes_count) {
+    std::cerr << "update_inode: número de inode inválido: " << inode_num << "\n";
+    return false;
+  }
+
+  uint32_t bg    = get_inode_block_group(inode_num);
+  uint32_t index = get_inode_index(inode_num);
+  uint64_t inode_table_block = get_inode_table_block(bg);
+  uint64_t offset = get_block_offset(inode_table_block) + index * sb.s_inode_size;
+
+  if (!write_bytes(image, offset, const_cast<inode*>(&inode_in), sizeof(inode_in))) {
+    std::cerr << "update_inode: erro ao escrever inode " << inode_num << "\n";
+    return false;
+  }
+  return true;
+}
+
+// alloc_inode: aloca o primeiro inode livre no SA, atualizando bitmaps e contadores
+uint32_t Ext4FS::alloc_inode() {
+  /**
+   * Percorre cada grupo consultando o GDT antes de ler o bitmap,
+   * evitando I/O desnecessário em grupos sem inodes livres.
+   */
+  for (uint64_t bg = 0; bg < num_groups; bg++) {
+    uint32_t free_in_group = get_gd_free_inodes_count(bg);
+
+    if (free_in_group == 0) {
+      continue; // grupo sem inodes livres — pula
+    }
+
+    // Lê o bitmap de inodes do grupo
+    uint64_t bitmap_block = get_inode_bitmap_block(static_cast<uint32_t>(bg));
+    uint64_t bitmap_offset = get_block_offset(bitmap_block);
+    std::vector<char> bitmap(block_size);
+
+    if (!read_bytes(image, bitmap_offset, bitmap.data(), block_size)) {
+      std::cerr << "alloc_inode: erro ao ler bitmap do grupo " << bg << "\n";
+      continue;
+    }
+
+    // Varre os bits do bitmap procurando o primeiro 0 (inode livre)
+    for (uint32_t i = 0; i < sb.s_inodes_per_group; i++) {
+      if (!test_bit(bitmap, i)) {
+
+        // prepara modificações em memória
+
+        // Bitmap com o bit do inode marcado como usado
+        std::vector<char> new_bitmap = bitmap;
+        set_bit(new_bitmap, i);
+
+        // Cópia do group descriptor com contador de inodes livres decrementado
+        group_description new_gd = gdt[bg];
+        uint32_t free_count = free_in_group - 1;
+        new_gd.bg_free_inodes_count_lo = static_cast<uint16_t>(free_count & 0xFFFF);
+        new_gd.bg_free_inodes_count_hi = static_cast<uint16_t>((free_count >> 16) & 0xFFFF);
+
+        // Cópia do superbloco com s_free_inodes_count decrementado
+        super_block new_sb = sb;
+        new_sb.s_free_inodes_count--;
+
+        // grava na imagem (ordem: bitmap → GDT → superbloco)
+        // Se qualquer escrita falhar, aborta sem aplicar as seguintes,
+        // mantendo o estado anterior intacto.
+
+        gdt[bg] = new_gd;
+        sb      = new_sb;
+
+        if (!update_inode_bitmap(bg, new_bitmap)) {
+          std::cerr << "alloc_inode: erro ao escrever bitmap do grupo " << bg << "\n";
+          return 0;
+        }
+
+        if (!update_gdt_entry(bg)) {
+          std::cerr << "alloc_inode: erro ao escrever GDT do grupo " << bg << "\n";
+          return 0;
+        }
+
+        if (!update_sb()) {
+          std::cerr << "alloc_inode: erro ao escrever superbloco\n";
+          return 0;
+        }
+
+        // Converte (grupo, índice) → número de inode (base 1)
+        uint32_t inode_num =
+            static_cast<uint32_t>(bg) * sb.s_inodes_per_group + i + 1;
+        return inode_num;
+      }
+    }
+  }
+
+  std::cerr << "alloc_inode: sem inodes livres no SA\n";
+  return 0;
+}
+
+// alloc_blocks: aloca até 'count' blocos contíguos livres no SA.
+// Percorre os grupos em ordem; dentro de cada grupo varre o bitmap procurando
+// a maior sequência contígua de bits 0, limitada a 'count'. Marca todos de uma
+// vez e atualiza GDT e superbloco. Retorna o primeiro bloco alocado e escreve
+// em 'allocated_count' a quantidade efetivamente alocada.
+uint64_t Ext4FS::alloc_blocks(uint64_t count, uint64_t& allocated_count) {
+  allocated_count = 0;
+
+  if (count == 0) {
+    return 0;
+  }
+
+  // Percorre cada grupo consultando o GDT antes de ler o bitmap,
+  // evitando I/O desnecessário em grupos sem blocos livres.
+  for (uint64_t bg = 0; bg < num_groups; bg++) {
+    uint32_t free_in_group = get_gd_free_blocks_count(bg);
+
+    if (free_in_group == 0) {
+      continue; // grupo sem blocos livres — pula
+    }
+
+    // Lê o bitmap de blocos do grupo
+    uint64_t bitmap_block = get_block_bitmap_block(static_cast<uint32_t>(bg));
+    uint64_t bitmap_offset = get_block_offset(bitmap_block);
+    std::vector<char> bitmap(block_size);
+
+    if (!read_bytes(image, bitmap_offset, bitmap.data(), block_size)) {
+      std::cerr << "alloc_blocks: erro ao ler bitmap do grupo " << bg << "\n";
+      continue;
+    }
+
+    // Varre o bitmap procurando a melhor sequência contígua de bits livres.
+    // Estratégia: encontra a primeira sequência de comprimento >= 1 e para
+    // assim que atingir 'count' ou acabarem os bits do grupo.
+    uint32_t best_start = 0;
+    uint64_t best_len   = 0;
+    uint32_t run_start  = 0;
+    uint64_t run_len    = 0;
+
+    // Varre cada bit do bitmap do grupo
+    for (uint32_t i = 0; i < sb.s_blocks_per_group; i++) {
+      if (!test_bit(bitmap, i)) {
+        if (run_len == 0) {
+          run_start = i; // início de uma nova sequência
+        }
+        run_len++;
+
+        // Assim que acharmos uma run com pelo menos 'count' blocos, para na hora
+        if (run_len >= count) {
+          best_start = run_start;
+          best_len   = count;
+          break;
+        }
+      } else {
+        // fim de uma run — guarda se for a maior vista até agora
+        if (run_len > best_len) {
+          best_start = run_start;
+          best_len   = run_len;
+        }
+        run_len = 0;
+      }
+    }
+
+    // Fecha a última run caso o loop termine com uma sequência em aberto
+    if (run_len > best_len) {
+      best_start = run_start;
+      best_len   = run_len;
+    }
+
+    if (best_len == 0) {
+      continue; // nenhum bloco livre encontrado neste grupo
+    }
+
+    // Limita ao máximo solicitado
+    uint64_t to_alloc = (best_len < count) ? best_len : count;
+
+    // prepara modificações em memória
+
+    // Bitmap com os bits dos blocos marcados como usados
+    std::vector<char> new_bitmap = bitmap;
+    for (uint64_t k = 0; k < to_alloc; k++) {
+      set_bit(new_bitmap, best_start + static_cast<uint32_t>(k));
+    }
+
+    // Cópia do group descriptor com contador de blocos livres decrementado
+    group_description new_gd = gdt[bg];
+    uint32_t free_count = free_in_group - static_cast<uint32_t>(to_alloc);
+    new_gd.bg_free_blocks_count_lo = static_cast<uint16_t>(free_count & 0xFFFF);
+    new_gd.bg_free_blocks_count_hi = static_cast<uint16_t>((free_count >> 16) & 0xFFFF);
+
+    // Atualiza estado em memória antes de gravar
+    uint64_t free_blocks = get_free_blocks_count() - to_alloc;
+    gdt[bg] = new_gd;
+    sb.s_free_blocks_count_lo = static_cast<uint32_t>(free_blocks & 0xFFFFFFFF);
+    sb.s_free_blocks_count_hi = static_cast<uint32_t>(free_blocks >> 32);
+
+    // grava na imagem (ordem: bitmap → GDT → superbloco)
+    if (!update_block_bitmap(bg, new_bitmap)) {
+      std::cerr << "alloc_blocks: erro ao escrever bitmap do grupo " << bg << "\n";
+      return 0;
+    }
+
+    if (!update_gdt_entry(bg)) {
+      std::cerr << "alloc_blocks: erro ao escrever GDT do grupo " << bg << "\n";
+      return 0;
+    }
+
+    if (!update_sb()) {
+      std::cerr << "alloc_blocks: erro ao escrever superbloco\n";
+      return 0;
+    }
+
+    // Converte (grupo, índice local) → número absoluto do primeiro bloco alocado
+    uint64_t first_block = get_abs_block(bg, best_start);
+
+    allocated_count = to_alloc;
+    return first_block;
+  }
+
+  std::cerr << "alloc_blocks: sem blocos livres no SA\n";
+  return 0;
+}
+
 void Ext4FS::print_superblock() const {
   const int w = 30;
   std::cout << std::left << std::setfill(' ');
