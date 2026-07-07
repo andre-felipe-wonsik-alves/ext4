@@ -118,6 +118,43 @@ public:
     uint32_t alloc_inode();
 
     /**
+     * Persiste o superbloco em memória (sb) na imagem, no offset fixo 1024.
+     * @returns true se a escrita foi bem-sucedida; false caso contrário
+     */
+    bool update_sb();
+
+    /**
+     * Persiste um group descriptor da GDT em memória na imagem.
+     * @param bg: número do grupo de blocos
+     * @returns true se a escrita foi bem-sucedida; false caso contrário
+     */
+    bool update_gdt_entry(uint64_t bg);
+
+    /**
+     * Persiste o bitmap de inodes de um grupo na imagem.
+     * @param bg: número do grupo de blocos
+     * @param bitmap: vetor com o conteúdo atualizado do bitmap (block_size bytes)
+     * @returns true se a escrita foi bem-sucedida; false caso contrário
+     */
+    bool update_inode_bitmap(uint64_t bg, const std::vector<char>& bitmap);
+
+    /**
+     * Persiste o bitmap de blocos de um grupo na imagem.
+     * @param bg: número do grupo de blocos
+     * @param bitmap: vetor com o conteúdo atualizado do bitmap (block_size bytes)
+     * @returns true se a escrita foi bem-sucedida; false caso contrário
+     */
+    bool update_block_bitmap(uint64_t bg, const std::vector<char>& bitmap);
+
+    /**
+     * Persiste um inode na tabela de inodes do seu grupo na imagem.
+     * @param inode_num: número do inode (base 1)
+     * @param inode_in: inode com os dados atualizados
+     * @returns true se a escrita foi bem-sucedida; false caso contrário
+     */
+    bool update_inode(uint32_t inode_num, const inode& inode_in);
+
+    /**
      * Aloca até 'count' blocos de dados livres e contíguos no SA.
      * Percorre os grupos em ordem e, dentro de cada grupo, busca a maior
      * sequência contígua de bits livres no bitmap, limitada a 'count'.

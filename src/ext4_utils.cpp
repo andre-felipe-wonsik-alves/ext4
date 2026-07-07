@@ -315,6 +315,70 @@ bool Ext4FS::block_is_used(uint64_t block_num){
   return test_bit(bitmap, block_bit_offset);
 }
 
+// update_sb: persiste o superbloco em memória na imagem
+bool Ext4FS::update_sb() {
+  if (!write_bytes(image, 1024, &sb, sizeof(super_block))) {
+    std::cerr << "update_sb: erro ao escrever superbloco\n";
+    return false;
+  }
+  return true;
+}
+
+// update_gdt_entry: persiste um group descriptor em memória na imagem
+bool Ext4FS::update_gdt_entry(uint64_t bg) {
+  uint16_t current_desc_size = (sb.s_desc_size == 0) ? 32 : sb.s_desc_size; // 32 bytes se a feature 64bit não estiver ativa, 64 bytes caso contrário
+  uint64_t offset = get_gdt_entry_offset(bg);
+
+  if (!write_bytes(image, offset, &gdt[bg], current_desc_size)) {
+    std::cerr << "update_gdt_entry: erro ao escrever GDT entry do grupo " << bg << "\n";
+    return false;
+  }
+  return true;
+}
+
+// update_inode_bitmap: persiste o bitmap de inodes de um grupo na imagem
+bool Ext4FS::update_inode_bitmap(uint64_t bg, const std::vector<char>& bitmap) {
+  uint64_t bitmap_block = get_inode_bitmap_block(static_cast<uint32_t>(bg));
+  uint64_t offset = get_block_offset(bitmap_block);
+
+  if (!write_bytes(image, offset, const_cast<char*>(bitmap.data()), block_size)) {
+    std::cerr << "update_inode_bitmap: erro ao escrever bitmap do grupo " << bg << "\n";
+    return false;
+  }
+  return true;
+}
+
+// update_block_bitmap: persiste o bitmap de blocos de um grupo na imagem
+bool Ext4FS::update_block_bitmap(uint64_t bg, const std::vector<char>& bitmap) {
+  uint64_t bitmap_block = get_block_bitmap_block(static_cast<uint32_t>(bg));
+  uint64_t offset = get_block_offset(bitmap_block);
+
+  if (!write_bytes(image, offset, const_cast<char*>(bitmap.data()), block_size)) {
+    std::cerr << "update_block_bitmap: erro ao escrever bitmap do grupo " << bg << "\n";
+    return false;
+  }
+  return true;
+}
+
+// update_inode: persiste um inode na tabela de inodes do seu grupo na imagem
+bool Ext4FS::update_inode(uint32_t inode_num, const inode& inode_in) {
+  if (inode_num == 0 || inode_num > sb.s_inodes_count) {
+    std::cerr << "update_inode: número de inode inválido: " << inode_num << "\n";
+    return false;
+  }
+
+  uint32_t bg    = get_inode_block_group(inode_num);
+  uint32_t index = get_inode_index(inode_num);
+  uint64_t inode_table_block = get_inode_table_block(bg);
+  uint64_t offset = get_block_offset(inode_table_block) + index * sb.s_inode_size;
+
+  if (!write_bytes(image, offset, const_cast<inode*>(&inode_in), sizeof(inode_in))) {
+    std::cerr << "update_inode: erro ao escrever inode " << inode_num << "\n";
+    return false;
+  }
+  return true;
+}
+
 // alloc_inode: aloca o primeiro inode livre no SA, atualizando bitmaps e contadores
 uint32_t Ext4FS::alloc_inode() {
   /**
@@ -362,29 +426,23 @@ uint32_t Ext4FS::alloc_inode() {
         // Se qualquer escrita falhar, aborta sem aplicar as seguintes,
         // mantendo o estado anterior intacto.
 
-        // Bitmap de inodes do grupo
-        if (!write_bytes(image, bitmap_offset, new_bitmap.data(), block_size)) {
+        gdt[bg] = new_gd;
+        sb      = new_sb;
+
+        if (!update_inode_bitmap(bg, new_bitmap)) {
           std::cerr << "alloc_inode: erro ao escrever bitmap do grupo " << bg << "\n";
           return 0;
         }
 
-        // Group Descriptor Table
-        uint64_t gd_offset = get_gdt_entry_offset(bg);
-        uint16_t current_desc_size = (sb.s_desc_size == 0) ? 32 : sb.s_desc_size;
-        if (!write_bytes(image, gd_offset, &new_gd, current_desc_size)) {
+        if (!update_gdt_entry(bg)) {
           std::cerr << "alloc_inode: erro ao escrever GDT do grupo " << bg << "\n";
           return 0;
         }
 
-        // Superbloco
-        if (!write_bytes(image, 1024, &new_sb, sizeof(super_block))) {
+        if (!update_sb()) {
           std::cerr << "alloc_inode: erro ao escrever superbloco\n";
           return 0;
         }
-
-        // atualiza estado em memória somente após sucesso total
-        gdt[bg] = new_gd;
-        sb = new_sb;
 
         // Converte (grupo, índice) → número de inode (base 1)
         uint32_t inode_num =
@@ -488,34 +546,27 @@ uint64_t Ext4FS::alloc_blocks(uint64_t count, uint64_t& allocated_count) {
     new_gd.bg_free_blocks_count_lo = static_cast<uint16_t>(free_count & 0xFFFF);
     new_gd.bg_free_blocks_count_hi = static_cast<uint16_t>((free_count >> 16) & 0xFFFF);
 
-    // Cópia do superbloco com s_free_blocks_count decrementado
-    super_block new_sb = sb;
+    // Atualiza estado em memória antes de gravar
     uint64_t free_blocks = get_free_blocks_count() - to_alloc;
-    new_sb.s_free_blocks_count_lo = static_cast<uint32_t>(free_blocks & 0xFFFFFFFF);
-    new_sb.s_free_blocks_count_hi = static_cast<uint32_t>(free_blocks >> 32);
+    gdt[bg] = new_gd;
+    sb.s_free_blocks_count_lo = static_cast<uint32_t>(free_blocks & 0xFFFFFFFF);
+    sb.s_free_blocks_count_hi = static_cast<uint32_t>(free_blocks >> 32);
 
     // grava na imagem (ordem: bitmap → GDT → superbloco)
-
-    if (!write_bytes(image, bitmap_offset, new_bitmap.data(), block_size)) {
+    if (!update_block_bitmap(bg, new_bitmap)) {
       std::cerr << "alloc_blocks: erro ao escrever bitmap do grupo " << bg << "\n";
       return 0;
     }
 
-    uint64_t gd_offset = get_gdt_entry_offset(bg);
-    uint16_t current_desc_size = (sb.s_desc_size == 0) ? 32 : sb.s_desc_size;
-    if (!write_bytes(image, gd_offset, &new_gd, current_desc_size)) {
+    if (!update_gdt_entry(bg)) {
       std::cerr << "alloc_blocks: erro ao escrever GDT do grupo " << bg << "\n";
       return 0;
     }
 
-    if (!write_bytes(image, 1024, &new_sb, sizeof(super_block))) {
+    if (!update_sb()) {
       std::cerr << "alloc_blocks: erro ao escrever superbloco\n";
       return 0;
     }
-
-    // atualiza estado em memória somente após sucesso total
-    gdt[bg] = new_gd;
-    sb = new_sb;
 
     // Converte (grupo, índice local) → número absoluto do primeiro bloco alocado
     uint64_t first_block = get_abs_block(bg, best_start);
