@@ -4,18 +4,24 @@
 
 #include "ext4_utils.h"
 #include "io_utils.h"
+#include "ext4checksum.h"
 #include <iomanip>
 #include <iostream>
 #include <string_view>
+#include <cstring>
+#include <cstdlib>
 
 // init: abre a imagem e inicializa todos os metadados do SA
-bool Ext4FS::init(const std::string &img_path) {
-  if (!open_image(img_path, image)) {
+bool Ext4FS::init(const std::string &img_path)
+{
+  if (!open_image(img_path, image))
+  {
     std::cerr << "error on open_image() in init()\n";
     return false;
   }
 
-  if (!read_superblock()) {
+  if (!read_superblock())
+  {
     std::cerr << "error on read_superblock() in init()\n";
     return false;
   }
@@ -26,16 +32,17 @@ bool Ext4FS::init(const std::string &img_path) {
   num_groups = get_num_groups();
   desc_size = sb.s_desc_size;
 
-/**
- * A GDT fica no bloco imediatamente após o superbloco.
- * Se block_size == 1024, o superbloco ocupa o bloco 1 (offset 1024),
- * então a GDT começa no bloco 2 (offset 2048).
- * Se block_size > 1024, o superbloco está dentro do bloco 0,
- * e a GDT começa no bloco 1 (offset = block_size).
- */
+  /**
+   * A GDT fica no bloco imediatamente após o superbloco.
+   * Se block_size == 1024, o superbloco ocupa o bloco 1 (offset 1024),
+   * então a GDT começa no bloco 2 (offset 2048).
+   * Se block_size > 1024, o superbloco está dentro do bloco 0,
+   * e a GDT começa no bloco 1 (offset = block_size).
+   */
   gdt_offset = ((block_size == 1024) ? 2 : 1) * block_size;
 
-  if (!read_gdt()) {
+  if (!read_gdt())
+  {
     std::cerr << "error on read_gdt() in init() \n";
     return false;
   }
@@ -44,30 +51,58 @@ bool Ext4FS::init(const std::string &img_path) {
 }
 
 // read_superblock: lê os 1024 bytes do superbloco no offset fixo 1024
-bool Ext4FS::read_superblock() {
+bool Ext4FS::read_superblock()
+{
   // O superbloco do ext4 sempre reside no offset 1024 bytes da partição */
-  if (!read_bytes(image, 1024, &sb, sizeof(super_block))) {
+  if (!read_bytes(image, 1024, &sb, sizeof(super_block)))
+  {
     return false;
+  }
+
+  // Validação de Checksum
+  uint32_t calculated = checksum_superblock(reinterpret_cast<char *>(&sb));
+  if (calculated != sb.s_checksum)
+  {
+    std::cerr << "\n[CRITICAL ERROR] Superblock checksum mismatch! The filesystem structure is corrupted.\n"
+              << "Calculated Checksum: " << calculated << "\n"
+              << "Stored Checksum:     " << sb.s_checksum << "\n"
+              << "Terminating terminal execution immediately to prevent data corruption.\n\n";
+    std::exit(1);
   }
 
   return true;
 }
 
 // read_gdt: lê todos os group descriptors da Group Descriptor Table
-bool Ext4FS::read_gdt() {
-/**
- * Se s_desc_size for 0 (SA sem a feature 64bit), cada descriptor tem 32 bytes.
- * Com a feature 64bit ativa, s_desc_size geralmente é 64.
- */
+bool Ext4FS::read_gdt()
+{
+  /**
+   * Se s_desc_size for 0 (SA sem a feature 64bit), cada descriptor tem 32 bytes.
+   * Com a feature 64bit activa, s_desc_size geralmente é 64.
+   */
   uint16_t current_desc_size = sb.s_desc_size == 0 ? 32 : sb.s_desc_size;
   uint64_t offset = gdt_offset;
 
   // Lê cada group descriptor e armazena no vetor gdt
-  for (uint64_t i = 0; i < num_groups; i++) {
-    group_description gd{}; 
+  for (uint64_t i = 0; i < num_groups; i++)
+  {
+    group_description gd{};
+    std::memset(&gd, 0, sizeof(gd));
 
-    if (!read_bytes(image, offset, &gd, current_desc_size)) {
+    if (!read_bytes(image, offset, &gd, current_desc_size))
+    {
       return false;
+    }
+
+    // Validação de Checksum do Group Descriptor
+    uint16_t calculated = checksum_group(reinterpret_cast<char *>(sb.s_uuid), i, reinterpret_cast<char *>(&gd));
+    if (calculated != gd.bg_checksum)
+    {
+      std::cerr << "\n[CRITICAL ERROR] Group Descriptor " << i << " checksum mismatch! The GDT structure is corrupted.\n"
+                << "Calculated Checksum: " << calculated << "\n"
+                << "Stored Checksum:     " << gd.bg_checksum << "\n"
+                << "Terminating terminal execution immediately to prevent data corruption.\n\n";
+      std::exit(1);
     }
 
     gdt.push_back(gd);
@@ -80,18 +115,20 @@ bool Ext4FS::read_gdt() {
 }
 
 // read_inode: localiza e lê um inode específico pelo seu número
-bool Ext4FS::read_inode(uint32_t inode_num, inode &inode_out) {
-  // Inode 0 não existe; inodes válidos começam em 1 
-  if (inode_num == 0 || inode_num > sb.s_inodes_count) {
+bool Ext4FS::read_inode(uint32_t inode_num, inode &inode_out)
+{
+  // Inode 0 não existe; inodes válidos começam em 1
+  if (inode_num == 0 || inode_num > sb.s_inodes_count)
+  {
     return false;
   }
 
-/**
- * Localização do inode no disco:
- *   1. Determinar em qual grupo de blocos o inode reside
- *   2. Determinar o índice do inode dentro desse grupo
- *   3. Calcular o offset absoluto na tabela de inodes do grupo
-*/
+  /**
+   * Localização do inode no disco:
+   *   1. Determinar em qual grupo de blocos o inode reside
+   *   2. Determinar o índice do inode dentro desse grupo
+   *   3. Calcular o offset absoluto na tabela de inodes do grupo
+   */
   uint32_t bg = get_inode_block_group(inode_num);
   uint32_t index = get_inode_index(inode_num);
 
@@ -99,20 +136,46 @@ bool Ext4FS::read_inode(uint32_t inode_num, inode &inode_out) {
   uint64_t inode_table_block = get_inode_table_block(bg);
   uint64_t block_offset = get_block_offset(inode_table_block) + inode_offset;
 
-  return read_bytes(image, block_offset, &inode_out, sizeof(inode_out));
+  // Criamos um buffer de 256 bytes preenchido com zero para rodar o checksum com segurança
+  std::vector<char> inode_buf(256, 0);
+  size_t bytes_to_read = std::min(static_cast<size_t>(sb.s_inode_size), inode_buf.size());
+  if (!read_bytes(image, block_offset, inode_buf.data(), bytes_to_read))
+  {
+    return false;
+  }
+
+  // Copia os dados lidos para a estrutura do inode
+  size_t copy_size = std::min(sizeof(inode), static_cast<size_t>(sb.s_inode_size));
+  std::memcpy(&inode_out, inode_buf.data(), copy_size);
+
+  // Validação de Checksum
+  uint32_t calculated = checksum_inode(reinterpret_cast<char *>(sb.s_uuid), inode_num, inode_out.i_generation, inode_buf.data());
+  uint32_t stored_checksum = (static_cast<uint32_t>(inode_out.i_checksum_hi) << 16) | inode_out.osd2.linux2.l_i_checksum_lo;
+  if (calculated != stored_checksum)
+  {
+    std::cerr << "\n[ERROR] Inode " << inode_num << " checksum mismatch! The file or directory entry is corrupted.\n"
+              << "Calculated Checksum: " << calculated << "\n"
+              << "Stored Checksum:     " << stored_checksum << "\n"
+              << "Skipping reading to prevent using corrupted inode metadata.\n\n";
+    return false;
+  }
+
+  return true;
 }
 
 // read_inode_content: lê o conteúdo completo de um arquivo via extent tree
-std::vector<char> Ext4FS::read_inode_content(const inode &inode_in) {
-/**
- * O campo i_block[] do inode contém a raiz da extent tree.
- * Fazemos um cast direto para ext4_extent_header*, pois usamos #pragma pack(1)
- * e os bytes estão contíguos.
-*/
+std::vector<char> Ext4FS::read_inode_content(const inode &inode_in, uint32_t inode_num)
+{
+  /**
+   * O campo i_block[] do inode contém a raiz da extent tree.
+   * Fazemos um cast direto para ext4_extent_header*, pois usamos #pragma pack(1)
+   * e os bytes estão contíguos.
+   */
   ext4_extent_header *header = (ext4_extent_header *)inode_in.i_block;
   std::vector<ext4_extent> leaf_extents;
 
-  if (!read_leaf_extents(header, leaf_extents)) {
+  if (!read_leaf_extents(header, leaf_extents, inode_num, inode_in.i_generation))
+  {
     std::cerr << "error on read_leaf_extents() in read_inode_content()\n";
     return {};
   }
@@ -122,7 +185,8 @@ std::vector<char> Ext4FS::read_inode_content(const inode &inode_in) {
   std::vector<char> inode_content; // i_block pode ser maior que file_size em algum momento?
   inode_content.reserve(file_size);
 
-  for (const auto &extent : leaf_extents) {
+  for (const auto &extent : leaf_extents)
+  {
     if (rem_bytes == 0)
       break;
 
@@ -135,18 +199,42 @@ std::vector<char> Ext4FS::read_inode_content(const inode &inode_in) {
      * Isso evita ler dados de blocos que foram alocados mas ainda não escritos.
      * Compara-se com rem_bytes para não ler além do tamanho real do arquivo,
      * evitando leitura do padding do último bloco.
-    */
+     */
     uint64_t extent_bytes =
         (extent.ee_len <= 32768 ? extent.ee_len : extent.ee_len - 32768) * block_size;
     uint64_t bytes = extent_bytes < rem_bytes ? extent_bytes : rem_bytes;
     std::vector<char> buf(bytes);
 
-    if (!read_bytes(image, offset, buf.data(), bytes)) {
+    if (!read_bytes(image, offset, buf.data(), bytes))
+    {
       std::cerr << "error on read_bytes() in read_inode_content()\n";
       return {};
     }
 
-    for (uint64_t i = 0; i < bytes; i++) {
+    if (inode_is_dir(inode_in) && inode_num != 0)
+    {
+      for (uint64_t b_offset = 0; b_offset < bytes; b_offset += block_size)
+      {
+        uint64_t curr_block_size = std::min(block_size, bytes - b_offset);
+        if (curr_block_size < block_size)
+        {
+          break; // directory blocks must be full blocks
+        }
+        uint32_t calculated = checksum_dir(reinterpret_cast<char *>(sb.s_uuid), inode_num, inode_in.i_generation, buf.data() + b_offset, block_size);
+        uint32_t stored_checksum = bytearray_to_int32_le(reinterpret_cast<unsigned char *>(buf.data() + b_offset + block_size - 4));
+        if (calculated != stored_checksum)
+        {
+          std::cerr << "\n[ERROR] Directory block checksum mismatch for Inode " << inode_num << "! The directory structure is corrupted.\n"
+                    << "Calculated Checksum: " << calculated << "\n"
+                    << "Stored Checksum:     " << stored_checksum << "\n"
+                    << "Skipping reading to prevent using corrupted directory contents.\n\n";
+          return {};
+        }
+      }
+    }
+
+    for (uint64_t i = 0; i < bytes; i++)
+    {
       inode_content.push_back(buf[i]);
     }
 
@@ -158,8 +246,12 @@ std::vector<char> Ext4FS::read_inode_content(const inode &inode_in) {
 
 // read_leaf_extents: percorre recursivamente a extent tree coletando folhas
 bool Ext4FS::read_leaf_extents(const ext4_extent_header *header,
-                               std::vector<ext4_extent> &leaf_extents) {
-  if (header->eh_depth == 0) {
+                               std::vector<ext4_extent> &leaf_extents,
+                               uint32_t inode_num,
+                               uint32_t inode_gen)
+{
+  if (header->eh_depth == 0)
+  {
     /**
      * Caso base: nó folha.
      * Logo após o header estão eh_entries structs ext4_extent contíguos.
@@ -167,10 +259,13 @@ bool Ext4FS::read_leaf_extents(const ext4_extent_header *header,
      */
     ext4_extent *extents = (ext4_extent *)(header + 1);
 
-    for (uint16_t i = 0; i < header->eh_entries; i++) {
+    for (uint16_t i = 0; i < header->eh_entries; i++)
+    {
       leaf_extents.push_back(extents[i]);
     }
-  } else {
+  }
+  else
+  {
     /**
      * Caso recursivo: nó interno (índice).
      * Logo após o header estão eh_entries structs ext4_extent_idx.
@@ -180,17 +275,35 @@ bool Ext4FS::read_leaf_extents(const ext4_extent_header *header,
     ext4_extent_idx *indices = (ext4_extent_idx *)(header + 1);
     std::vector<char> buf(block_size);
 
-    for (uint16_t i = 0; i < header->eh_entries; i++) {
+    for (uint16_t i = 0; i < header->eh_entries; i++)
+    {
       uint64_t extent_phys_block = get_extent_idx_phys_block(indices[i]);
       uint64_t offset = get_block_offset(extent_phys_block);
 
-      if (!read_bytes(image, offset, buf.data(), block_size)) {
+      if (!read_bytes(image, offset, buf.data(), block_size))
+      {
         std::cerr << "error on read_bytes() in read_leaf_extents()\n";
         return false;
       }
 
+      // Validação de Checksum do Bloco Extent
+      if (inode_num != 0)
+      {
+        uint32_t calculated = checksum_extent(reinterpret_cast<char *>(sb.s_uuid), inode_num, inode_gen, buf.data(), block_size);
+        uint32_t stored_checksum = bytearray_to_int32_le(reinterpret_cast<unsigned char *>(&buf[block_size - 4]));
+        if (calculated != stored_checksum)
+        {
+          std::cerr << "\n[ERROR] Extent block checksum mismatch for Inode " << inode_num << "! The extent tree metadata is corrupted.\n"
+                    << "Calculated Checksum: " << calculated << "\n"
+                    << "Stored Checksum:     " << stored_checksum << "\n"
+                    << "Skipping reading to prevent using corrupted extent metadata.\n\n";
+          return false;
+        }
+      }
+
       // O primeiro byte do bloco lido é o início do header do nó filho
-      if (!read_leaf_extents((ext4_extent_header *)buf.data(), leaf_extents)) {
+      if (!read_leaf_extents((ext4_extent_header *)buf.data(), leaf_extents, inode_num, inode_gen))
+      {
         std::cerr << "error on read_leaf_extents() in read_leaf_extents()\n";
         return false;
       };
@@ -202,13 +315,16 @@ bool Ext4FS::read_leaf_extents(const ext4_extent_header *header,
 
 // find_inode_by_path: resolve um caminho para um número de inode
 uint32_t Ext4FS::find_inode_by_path(const std::string &path,
-                                    uint32_t inode_num) {
-  if (path.empty()) {
+                                    uint32_t inode_num)
+{
+  if (path.empty())
+  {
     return inode_num;
   }
 
   // Caminho "/" resolve direto para o inode raiz (sempre inode 2 no ext4)
-  if (path == "/") {
+  if (path == "/")
+  {
     return 2;
   }
 
@@ -219,20 +335,24 @@ uint32_t Ext4FS::find_inode_by_path(const std::string &path,
   std::vector<std::string> tokens = split_tokens(path);
 
   // Percorre cada componente do caminho, descendo um nível por iteração
-  for (size_t i = 0; i < tokens.size(); i++) {
-    if (!read_inode(curr_inode_num, curr_inode)) {
+  for (size_t i = 0; i < tokens.size(); i++)
+  {
+    if (!read_inode(curr_inode_num, curr_inode))
+    {
       return 0;
     }
 
     // Cada componente intermediário deve ser um diretório
-    if (!inode_is_dir(curr_inode)) {
+    if (!inode_is_dir(curr_inode))
+    {
       return 0;
     }
 
-    std::vector<char> dir_content = read_inode_content(curr_inode);
+    std::vector<char> dir_content = read_inode_content(curr_inode, curr_inode_num);
     curr_inode_num = find_inode_by_dir(dir_content, tokens[i]);
 
-    if (curr_inode_num == 0) {
+    if (curr_inode_num == 0)
+    {
       return 0;
     }
   }
@@ -242,7 +362,8 @@ uint32_t Ext4FS::find_inode_by_path(const std::string &path,
 
 // find_inode_by_dir: busca uma entrada de diretório pelo nome
 uint32_t Ext4FS::find_inode_by_dir(const std::vector<char> &dir_content,
-                                   const std::string &file_name) {
+                                   const std::string &file_name)
+{
   size_t offset = 0;
 
   /**
@@ -250,24 +371,29 @@ uint32_t Ext4FS::find_inode_by_dir(const std::vector<char> &dir_content,
    * Cada entrada tem tamanho variável; rec_len indica quantos bytes pular
    * para chegar na próxima entrada.
    */
-  while (offset < dir_content.size()) {
+  while (offset < dir_content.size())
+  {
     ext4_dir_entry_2 *dir_entry = (ext4_dir_entry_2 *)(&dir_content[offset]);
-    
-    if (dir_entry->rec_len == 0) {
+
+    if (dir_entry->rec_len == 0)
+    {
       break;
     }
 
-    if (dir_entry->inode != 0) {
+    if (dir_entry->inode != 0)
+    {
       // name NÃO é null-terminated: usar name_len para construir a string
       std::string dir_entry_name(dir_entry->name, dir_entry->name_len);
 
-      if (dir_entry_name == file_name) {
+      if (dir_entry_name == file_name)
+      {
         return dir_entry->inode;
       }
     }
 
     // rec_len == 0 indica corrupção ou fim antecipado do diretório
-    if (dir_entry->rec_len == 0) {
+    if (dir_entry->rec_len == 0)
+    {
       break;
     }
 
@@ -277,8 +403,10 @@ uint32_t Ext4FS::find_inode_by_dir(const std::vector<char> &dir_content,
   return 0;
 }
 
-bool Ext4FS::inode_is_used(uint32_t inode_num) {
-  if (inode_num == 0 || inode_num > sb.s_inodes_count) {
+bool Ext4FS::inode_is_used(uint32_t inode_num)
+{
+  if (inode_num == 0 || inode_num > sb.s_inodes_count)
+  {
     std::cerr << "invalid inode given to inode_is_used()\n";
     return false;
   }
@@ -288,16 +416,32 @@ bool Ext4FS::inode_is_used(uint32_t inode_num) {
   uint64_t offset = get_block_offset(bitmap_block);
   std::vector<char> bitmap(block_size);
   uint32_t inode_bit_offset = get_inode_bitmap_offset(inode_num);
-  
-  if (!read_bytes(image, offset, bitmap.data(), block_size)) {
+
+  if (!read_bytes(image, offset, bitmap.data(), block_size))
+  {
+    return false;
+  }
+
+  // Validação de Checksum
+  uint32_t calculated = checksum_bitmap(reinterpret_cast<char *>(sb.s_uuid), bitmap.data(), block_size);
+  const group_description &gd = gdt[bg];
+  uint32_t stored = (static_cast<uint32_t>(gd.bg_inode_bitmap_csum_hi) << 16) | gd.bg_inode_bitmap_csum_lo;
+  if (calculated != stored)
+  {
+    std::cerr << "\n[ERROR] Inode bitmap for block group " << bg << " checksum mismatch! The bitmap metadata is corrupted.\n"
+              << "Calculated Checksum: " << calculated << "\n"
+              << "Stored Checksum:     " << stored << "\n"
+              << "Skipping operation to prevent using corrupted bitmap state.\n\n";
     return false;
   }
 
   return test_bit(bitmap, inode_bit_offset);
 }
 
-bool Ext4FS::block_is_used(uint64_t block_num){
- if (block_num < sb.s_first_data_block || block_num >= blocks_count) {
+bool Ext4FS::block_is_used(uint64_t block_num)
+{
+  if (block_num < sb.s_first_data_block || block_num >= blocks_count)
+  {
     std::cerr << "invalid block given to block_is_used()\n";
     return false;
   }
@@ -307,15 +451,30 @@ bool Ext4FS::block_is_used(uint64_t block_num){
   uint64_t offset = get_block_offset(bitmap_block);
   std::vector<char> bitmap(block_size);
   uint32_t block_bit_offset = get_block_bitmap_offset(block_num);
-  
-  if (!read_bytes(image, offset, bitmap.data(), block_size)) {
+
+  if (!read_bytes(image, offset, bitmap.data(), block_size))
+  {
+    return false;
+  }
+
+  // Validação de Checksum
+  uint32_t calculated = checksum_bitmap(reinterpret_cast<char *>(sb.s_uuid), bitmap.data(), block_size);
+  const group_description &gd = gdt[bg];
+  uint32_t stored = (static_cast<uint32_t>(gd.bg_block_bitmap_csum_hi) << 16) | gd.bg_block_bitmap_csum_lo;
+  if (calculated != stored)
+  {
+    std::cerr << "\n[ERROR] Block bitmap for block group " << bg << " checksum mismatch! The bitmap metadata is corrupted.\n"
+              << "Calculated Checksum: " << calculated << "\n"
+              << "Stored Checksum:     " << stored << "\n"
+              << "Skipping operation to prevent using corrupted bitmap state.\n\n";
     return false;
   }
 
   return test_bit(bitmap, block_bit_offset);
 }
 
-void Ext4FS::print_superblock() const {
+void Ext4FS::print_superblock() const
+{
   const int w = 30;
   std::cout << std::left << std::setfill(' ');
 
@@ -523,11 +682,13 @@ void Ext4FS::print_superblock() const {
 }
 
 // print_gdt: imprime todos os group descriptors da GDT na saída padrão
-void Ext4FS::print_gdt() const {
+void Ext4FS::print_gdt() const
+{
   const int w = 30;
   std::cout << std::left << std::setfill(' ');
 
-  for (size_t i = 0; i < gdt.size(); i++) {
+  for (size_t i = 0; i < gdt.size(); i++)
+  {
     const auto &gd = gdt[i];
 
     std::cout << std::setw(w) << "bg_block_bitmap_lo:" << gd.bg_block_bitmap_lo
@@ -586,7 +747,8 @@ void Ext4FS::print_gdt() const {
 }
 
 // print_inode: imprime todos os campos de um inode na saída padrão
-void Ext4FS::print_inode(const inode &inode_in, uint32_t /*inode_num*/) const {
+void Ext4FS::print_inode(const inode &inode_in, uint32_t /*inode_num*/) const
+{
   const int w = 30;
   std::cout << std::left << std::setfill(' ');
 
@@ -616,7 +778,8 @@ void Ext4FS::print_inode(const inode &inode_in, uint32_t /*inode_num*/) const {
 
   // i_block contém a extent tree inline; imprime os valores brutos
   std::cout << std::setw(w) << "i_block:" << "\n";
-  for (int i = 0; i < 15; i++) {
+  for (int i = 0; i < 15; i++)
+  {
     std::cout << inode_in.i_block[i];
   }
   std::cout << "\n";

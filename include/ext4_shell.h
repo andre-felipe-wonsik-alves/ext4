@@ -4,7 +4,7 @@
  * Fornece uma interface de linha de comando que permite explorar o conteúdo
  * de uma imagem ext4: listar diretórios, ler arquivos, inspecionar inodes,
  * exportar e importar arquivos.
-*/
+ */
 
 #ifndef SHELL_H
 #define SHELL_H
@@ -14,10 +14,11 @@
 #include <string>
 #include <unordered_map>
 
-class Ext4Shell {
+class Ext4Shell
+{
 private:
-    Ext4FS fs; // Instância do sistema de arquivos ext4
-    uint32_t curr_inode; // Número do inode do diretório corrente (inicia em 2 = raiz)
+    Ext4FS fs;             // Instância do sistema de arquivos ext4
+    uint32_t curr_inode;   // Número do inode do diretório corrente (inicia em 2 = raiz)
     std::string curr_path; // Caminho absoluto do diretório corrente (inicia em "/")
     std::string img_path;  // Caminho da imagem de disco do EXT4
 
@@ -74,7 +75,6 @@ private:
 
     /**
      * Verifica se um bloco está livre ou ocupado no bitmap de blocos.
-     * (Não implementado)
      *
      * @param block_num número do bloco a verificar
      */
