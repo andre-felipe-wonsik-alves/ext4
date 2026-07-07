@@ -322,9 +322,7 @@ uint32_t Ext4FS::alloc_inode() {
    * evitando I/O desnecessário em grupos sem inodes livres.
    */
   for (uint64_t bg = 0; bg < num_groups; bg++) {
-    uint32_t free_in_group =
-        (static_cast<uint32_t>(gdt[bg].bg_free_inodes_count_hi) << 16) | // << 16 para o hi, pois é um uint16_t 
-        gdt[bg].bg_free_inodes_count_lo; // || para o lo, pois é um uint16_t
+    uint32_t free_in_group = get_gd_free_inodes_count(bg);
 
     if (free_in_group == 0) {
       continue; // grupo sem inodes livres — pula
@@ -371,8 +369,8 @@ uint32_t Ext4FS::alloc_inode() {
         }
 
         // Group Descriptor Table
+        uint64_t gd_offset = get_gdt_entry_offset(bg);
         uint16_t current_desc_size = (sb.s_desc_size == 0) ? 32 : sb.s_desc_size;
-        uint64_t gd_offset = gdt_offset + bg * current_desc_size;
         if (!write_bytes(image, gd_offset, &new_gd, current_desc_size)) {
           std::cerr << "alloc_inode: erro ao escrever GDT do grupo " << bg << "\n";
           return 0;
@@ -415,9 +413,7 @@ uint64_t Ext4FS::alloc_blocks(uint64_t count, uint64_t& allocated_count) {
   // Percorre cada grupo consultando o GDT antes de ler o bitmap,
   // evitando I/O desnecessário em grupos sem blocos livres.
   for (uint64_t bg = 0; bg < num_groups; bg++) {
-    uint32_t free_in_group =
-        (static_cast<uint32_t>(gdt[bg].bg_free_blocks_count_hi) << 16) |
-        gdt[bg].bg_free_blocks_count_lo;
+    uint32_t free_in_group = get_gd_free_blocks_count(bg);
 
     if (free_in_group == 0) {
       continue; // grupo sem blocos livres — pula
@@ -505,8 +501,8 @@ uint64_t Ext4FS::alloc_blocks(uint64_t count, uint64_t& allocated_count) {
       return 0;
     }
 
+    uint64_t gd_offset = get_gdt_entry_offset(bg);
     uint16_t current_desc_size = (sb.s_desc_size == 0) ? 32 : sb.s_desc_size;
-    uint64_t gd_offset = gdt_offset + bg * current_desc_size;
     if (!write_bytes(image, gd_offset, &new_gd, current_desc_size)) {
       std::cerr << "alloc_blocks: erro ao escrever GDT do grupo " << bg << "\n";
       return 0;
@@ -521,10 +517,8 @@ uint64_t Ext4FS::alloc_blocks(uint64_t count, uint64_t& allocated_count) {
     gdt[bg] = new_gd;
     sb = new_sb;
 
-    // Converte (grupo, índice) → número absoluto do primeiro bloco alocado
-    uint64_t first_block =
-        static_cast<uint64_t>(bg) * sb.s_blocks_per_group +
-        sb.s_first_data_block + best_start;
+    // Converte (grupo, índice local) → número absoluto do primeiro bloco alocado
+    uint64_t first_block = get_abs_block(bg, best_start);
 
     allocated_count = to_alloc;
     return first_block;

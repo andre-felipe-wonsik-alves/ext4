@@ -344,6 +344,101 @@ public:
         uint32_t bit_idx = bit_offset % 8;
         bitmap[byte_idx] &= ~(1 << bit_idx);
     }
+
+    // Helpers para campos hi/lo da GDT (uint16_t hi | uint16_t lo → uint32_t)
+    /**
+     * Retorna o número de inodes livres de um grupo de blocos.
+     * @param bg: número do grupo de blocos
+     * @returns bg_free_inodes_count_hi << 16 | bg_free_inodes_count_lo
+     */
+    inline uint32_t get_gd_free_inodes_count(uint64_t bg) const {
+        return (static_cast<uint32_t>(gdt[bg].bg_free_inodes_count_hi) << 16) | // << 16 pois o campo hi é 16 bits
+                gdt[bg].bg_free_inodes_count_lo;
+    }
+
+    /**
+     * Atualiza o contador de inodes livres de um grupo de blocos em memória.
+     * Divide 'val' nos campos hi (bits 31–16) e lo (bits 15–0).
+     * @param bg: número do grupo de blocos
+     * @param val: novo valor do contador
+     */
+    inline void set_gd_free_inodes_count(uint64_t bg, uint32_t val) {
+        gdt[bg].bg_free_inodes_count_lo = static_cast<uint16_t>(val & 0xFFFF); // 0xFFFF pois o campo lo é 16 bits
+        gdt[bg].bg_free_inodes_count_hi = static_cast<uint16_t>((val >> 16) & 0xFFFF);
+    }
+
+    /**
+     * Retorna o número de blocos livres de um grupo de blocos.
+     * @param bg: número do grupo de blocos
+     * @returns bg_free_blocks_count_hi << 16 | bg_free_blocks_count_lo
+     */
+    inline uint32_t get_gd_free_blocks_count(uint64_t bg) const {
+        return (static_cast<uint32_t>(gdt[bg].bg_free_blocks_count_hi) << 16) |
+                gdt[bg].bg_free_blocks_count_lo;
+    }
+
+    /**
+     * Atualiza o contador de blocos livres de um grupo de blocos em memória.
+     * Divide 'val' nos campos hi (bits 31–16) e lo (bits 15–0).
+     * @param bg: número do grupo de blocos
+     * @param val: novo valor do contador
+     */
+    inline void set_gd_free_blocks_count(uint64_t bg, uint32_t val) {
+        gdt[bg].bg_free_blocks_count_lo = static_cast<uint16_t>(val & 0xFFFF);
+        gdt[bg].bg_free_blocks_count_hi = static_cast<uint16_t>((val >> 16) & 0xFFFF);
+    }
+
+    /**
+     * Retorna o número de diretórios usados em um grupo de blocos.
+     * @param bg: número do grupo de blocos
+     * @returns bg_used_dirs_count_hi << 16 | bg_used_dirs_count_lo
+     */
+    inline uint32_t get_gd_used_dirs_count(uint64_t bg) const {
+        return (static_cast<uint32_t>(gdt[bg].bg_used_dirs_count_hi) << 16) |
+                gdt[bg].bg_used_dirs_count_lo;
+    }
+
+    /**
+     * Atualiza o contador de diretórios usados de um grupo de blocos em memória.
+     * @param bg: número do grupo de blocos
+     * @param val: novo valor do contador
+     */
+    inline void set_gd_used_dirs_count(uint64_t bg, uint32_t val) {
+        gdt[bg].bg_used_dirs_count_lo = static_cast<uint16_t>(val & 0xFFFF);
+        gdt[bg].bg_used_dirs_count_hi = static_cast<uint16_t>((val >> 16) & 0xFFFF);
+    }
+
+    // Helpers para cálculos de offset de grupos
+    /**
+     * Retorna o número do primeiro bloco de dados de um grupo de blocos.
+     * Equivale a: bg * s_blocks_per_group + s_first_data_block
+     * @param bg: número do grupo de blocos
+     * @returns primeiro bloco absoluto do grupo
+     */
+    inline uint64_t get_group_first_block(uint64_t bg) const {
+        return static_cast<uint64_t>(bg) * sb.s_blocks_per_group + sb.s_first_data_block;
+    }
+
+    /**
+     * Converte um índice local de bloco dentro de um grupo para número absoluto.
+     * Equivale a: get_group_first_block(bg) + local_idx
+     * @param bg: número do grupo de blocos
+     * @param local_idx: índice do bloco dentro do grupo (0-based, relativo ao bitmap)
+     * @returns número absoluto do bloco
+     */
+    inline uint64_t get_abs_block(uint64_t bg, uint32_t local_idx) const {
+        return get_group_first_block(bg) + local_idx;
+    }
+
+    /**
+     * Retorna o offset em bytes do GDT entry de um grupo de blocos na imagem.
+     * @param bg: número do grupo de blocos
+     * @returns gdt_offset + bg * desc_size
+     */
+    inline uint64_t get_gdt_entry_offset(uint64_t bg) const {
+        uint16_t current_desc_size = (sb.s_desc_size == 0) ? 32 : sb.s_desc_size;
+        return gdt_offset + bg * current_desc_size;
+    }
 };
 
 #endif
