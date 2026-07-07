@@ -517,22 +517,16 @@ void Ext4Shell::balloc(uint64_t count) {
     return;
   }
 
-  if (count == 1) {
-    uint64_t blk = fs.alloc_block();
-    if (blk == 0) {
-      std::cout << "[!] Não foi possível alocar um bloco livre\n";
-      return;
-    }
-    std::cout << "[*] Bloco alocado: " << blk << "\n";
-  } else {
-    std::vector<uint64_t> blocks = fs.alloc_blocks(count);
-    if (blocks.empty()) {
-      std::cout << "[!] Não foi possível alocar " << count << " blocos\n";
-      return;
-    }
-    std::cout << "[*] " << blocks.size() << " bloco(s) alocado(s):\n";
-    for (uint64_t b : blocks) {
-      std::cout << "    " << b << "\n";
-    }
+  uint64_t allocated_count = 0;
+  uint64_t first_block = fs.alloc_blocks(count, allocated_count);
+
+  if (first_block == 0) {
+    std::cout << "[!] Não foi possível alocar blocos livres\n";
+    return;
+  }
+
+  std::cout << "[*] " << allocated_count << " bloco(s) alocado(s) a partir do bloco " << first_block << "\n";
+  for (uint64_t k = 0; k < allocated_count; k++) {
+    std::cout << "    " << first_block + k << "\n";
   }
 }

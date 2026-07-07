@@ -118,22 +118,17 @@ public:
     uint32_t alloc_inode();
 
     /**
-     * Aloca o primeiro bloco de dados livre encontrado no SA.
-     * Percorre os grupos em ordem, lê o bitmap de blocos de cada grupo e
-     * marca o primeiro bit livre. Atualiza os contadores do GDT e do superbloco
-     * na imagem.
-     * @returns o número do bloco alocado (>= s_first_data_block), ou 0 em caso de falha
+     * Aloca até 'count' blocos de dados livres e contíguos no SA.
+     * Percorre os grupos em ordem e, dentro de cada grupo, busca a maior
+     * sequência contígua de bits livres no bitmap, limitada a 'count'.
+     * Marca todos os bits alocados de uma vez, atualizando os contadores
+     * do GDT e do superbloco na imagem.
+     * @param count: quantidade máxima de blocos contíguos a alocar
+     * @param allocated_count: (saída) quantidade de blocos efetivamente alocados
+     * @returns o número do primeiro bloco alocado (>= s_first_data_block),
+     *          ou 0 em caso de falha. allocated_count é 0 nesse caso.
      */
-    uint64_t alloc_block();
-
-    /**
-     * Aloca múltiplos blocos de dados livres contíguos (ou espalhados, se
-     * não houver espaço contíguo suficiente) no SA.
-     * Reusa alloc_block() para cada bloco requisitado.
-     * @param count: quantidade de blocos a alocar
-     * @returns vetor com os números dos blocos alocados; vazio em caso de falha
-     */
-    std::vector<uint64_t> alloc_blocks(uint64_t count);
+    uint64_t alloc_blocks(uint64_t count, uint64_t& allocated_count);
 
     /**
      * Imprime todos os campos do superbloco na saída padrão.
