@@ -5,7 +5,6 @@
 #include "ext4_shell.h"
 #include "io_utils.h"
 #include <ctime>
-#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -193,13 +192,6 @@ void Ext4Shell::info() {
   std::cout << "        INFORMAÇÕES DA IMAGEM (ARQUIVO SO)        \n";
   std::cout << "==================================================\n";
   std::cout << "Caminho da Imagem:   " << img_path << "\n";
-  try {
-    auto sz = std::filesystem::file_size(img_path);
-    std::cout << "Tamanho do Arquivo:  " << sz << " bytes ("
-              << (sz / 1024.0 / 1024.0) << " MiB)\n";
-  } catch (...) {
-    std::cout << "Tamanho do Arquivo:  Nao foi possivel obter\n";
-  }
 
   uint64_t block_size = fs.get_block_size();
   uint64_t total_blocks = fs.get_blocks_count();
