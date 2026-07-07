@@ -87,6 +87,20 @@ public:
     uint32_t find_inode_by_dir(const std::vector<char>& dir_content, const std::string& file_name);
 
     /**
+     * Verifica se um inode está sem uso
+     * @param inode_num: número do inode
+     * @returns true se o inode estiver em uso; false caso contrário
+     */
+    bool inode_is_used(uint32_t inode_num);
+
+    /**
+     * Verifica se um bloco está sem uso
+     * @param block_num: número do bloco
+     * @returns true se o inode estiver em uso; false caso contrário
+     */
+    bool block_is_used(uint64_t block_num);
+
+    /**
      * Imprime um superbloco
      */
     void print_superblock() const;
@@ -133,8 +147,8 @@ public:
      * @param block: número do bloco
      * @returns block * block_size
      */
-    inline uint64_t get_block_offset(uint64_t block) const {
-        return block * block_size;
+    inline uint64_t get_block_offset(uint64_t block_num) const {
+        return block_num * block_size;
     }
 
     /**
@@ -144,6 +158,10 @@ public:
      */
     inline uint32_t get_inode_block_group(uint32_t inode_num) const {
         return (inode_num - 1) / sb.s_inodes_per_group;
+    }
+
+    inline uint32_t get_block_block_group(uint64_t block_num) const {
+        return (block_num - sb.s_first_data_block) / sb.s_blocks_per_group;
     }
 
     /**
@@ -199,6 +217,78 @@ public:
      */
     inline bool inode_is_dir(const inode& inode) const {
         return (inode.i_mode & 0x4000) == 0x4000;
+    }
+
+    /**
+     * Retorna o bloco onde está o mapa de bits de inodes um grupo de blocos
+     * @param bg: número do grupo de blocos
+     * @returns bg_inode_bitmap_hi << 32 | bg_inode_bitmap_lo
+     */
+    inline uint64_t get_inode_bitmap_block(uint32_t bg) const {
+        const group_description& gd = gdt[bg];
+        return (static_cast<uint64_t>(gd.bg_inode_bitmap_hi) << 32) | gd.bg_inode_bitmap_lo;
+    }
+
+    /**
+     * Retorna o bloco onde está o mapa de bits de blocos de um grupo de blocos
+     * @param bg: número do grupo de blocos
+     * @returns bg_block_bitmap_hi << 32 | bg_block_bitmap_lo
+     */
+    inline uint64_t get_block_bitmap_block(uint32_t bg) const {
+        const group_description& gd = gdt[bg];
+        return (static_cast<uint64_t>(gd.bg_block_bitmap_hi) << 32) | gd.bg_block_bitmap_lo;
+    }
+
+     /**
+     * Retorna o offset do bit que representa um inode no mapa de bits de inodes
+     * @param inode_num: número do inode
+     * @returns (inode_num - 1) % s_inodes_per_group;
+     */
+    inline uint32_t get_inode_bitmap_offset(uint32_t inode_num) const {
+        return (inode_num - 1) % sb.s_inodes_per_group;
+    }
+
+    /**
+     * Retorna o offset do bit que representa um bloco no mapade bits de blocos
+     * @param block_num: número do bloco
+     * @returns (block_num - s_first_data_block) % s_blocks_per_group
+     */
+    inline uint32_t get_block_bitmap_offset(uint64_t block_num) const {
+        return (block_num - sb.s_first_data_block) % sb.s_blocks_per_group;
+    }
+
+    /**
+     * Verifica se um bit está ativo em um mapa de bits
+     * @param bitmap: vetor contendo o bitmap
+     * @param bit_offset: offset do bit a ser validado
+     * @returns true se o bit for 1; false caso contrário
+     */    
+    inline bool test_bit(const std::vector<char>& bitmap, uint32_t bit_offset) const {
+        uint32_t byte_idx = bit_offset / 8;
+        uint32_t bit_idx = bit_offset % 8;
+        return (bitmap[byte_idx] & (1 << bit_idx)) != 0;
+    }
+
+    /**
+     * Ativa um bit em um mapa de bits
+     * @param bitmap: vetor contendo o bitmap
+     * @param bit_offset: offset do bit a ser ativado
+     */    
+    inline void set_bit(std::vector<char>& bitmap, uint32_t bit_offset) const {
+        uint32_t byte_idx = bit_offset / 8;
+        uint32_t bit_idx = bit_offset % 8;
+        bitmap[byte_idx] |= (1 << bit_idx);
+    }
+
+    /**
+     * Limpa um bit em um mapa de bits
+     * @param bitmap: vetor contendo o bitmap
+     * @param bit_offset: offset do bit a ser limpo
+     */       
+    inline void clear_bit(std::vector<char>& bitmap, uint32_t bit_offset) const {
+        uint32_t byte_idx = bit_offset / 8;
+        uint32_t bit_idx = bit_offset % 8;
+        bitmap[byte_idx] &= ~(1 << bit_idx);
     }
 };
 

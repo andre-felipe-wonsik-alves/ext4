@@ -56,7 +56,7 @@ bool Ext4FS::read_gdt() {
   return true;
 }
 
-bool Ext4FS::read_inode(uint32_t inode_num, inode &inode_out) {
+bool Ext4FS::read_inode(uint32_t inode_num, inode &inode) {
   if (inode_num == 0 || inode_num > sb.s_inodes_count) {
     return false;
   }
@@ -69,11 +69,11 @@ bool Ext4FS::read_inode(uint32_t inode_num, inode &inode_out) {
 
   uint64_t block_offset = get_block_offset(inode_table_block) + inode_offset;
 
-  return read_bytes(image, block_offset, &inode_out, sizeof(inode));
+  return read_bytes(image, block_offset, &inode, sizeof(inode));
 }
 
-std::vector<char> Ext4FS::read_inode_content(const inode &inode_in) {
-  ext4_extent_header *header = (ext4_extent_header *)inode_in.i_block;
+std::vector<char> Ext4FS::read_inode_content(const inode &inode) {
+  ext4_extent_header *header = (ext4_extent_header *)inode.i_block;
   std::vector<ext4_extent> leaf_extents;
 
   if (!read_leaf_extents(header, leaf_extents)) {
@@ -81,7 +81,7 @@ std::vector<char> Ext4FS::read_inode_content(const inode &inode_in) {
     return {};
   }
 
-  uint64_t file_size = get_file_size(inode_in);
+  uint64_t file_size = get_file_size(inode);
   uint64_t rem_bytes = file_size;
   std::vector<char>
       inode_content; // i_block pode ser maior que file_size em algum momento?
@@ -194,6 +194,10 @@ uint32_t Ext4FS::find_inode_by_dir(const std::vector<char> &dir_content,
 
   while (offset < dir_content.size()) {
     ext4_dir_entry_2 *dir_entry = (ext4_dir_entry_2 *)(&dir_content[offset]);
+    
+    if (dir_entry->rec_len == 0) {
+      break;
+    }
 
     if (dir_entry->inode != 0) {
       std::string dir_entry_name(dir_entry->name, dir_entry->name_len);
@@ -203,14 +207,48 @@ uint32_t Ext4FS::find_inode_by_dir(const std::vector<char> &dir_content,
       }
     }
 
-    if (dir_entry->rec_len == 0) {
-      break;
-    }
-
     offset += dir_entry->rec_len;
   }
 
   return 0;
+}
+
+bool Ext4FS::inode_is_used(uint32_t inode_num) {
+  if (inode_num == 0 || inode_num > sb.s_inodes_count) {
+    std::cerr << "invalid inode given to inode_is_used()\n";
+    return false;
+  }
+
+  uint32_t bg = get_inode_block_group(inode_num);
+  uint64_t bitmap_block = get_inode_bitmap_block(bg);
+  uint64_t offset = get_block_offset(bitmap_block);
+  std::vector<char> bitmap(block_size);
+  uint32_t inode_bit_offset = get_inode_bitmap_offset(inode_num);
+  
+  if (!read_bytes(image, offset, bitmap.data(), block_size)) {
+    return false;
+  }
+
+  return test_bit(bitmap, inode_bit_offset);
+}
+
+bool Ext4FS::block_is_used(uint64_t block_num){
+ if (block_num < sb.s_first_data_block || block_num >= blocks_count) {
+    std::cerr << "invalid block given to block_is_used()\n";
+    return false;
+  }
+
+  uint32_t bg = get_block_block_group(block_num);
+  uint64_t bitmap_block = get_block_bitmap_block(bg);
+  uint64_t offset = get_block_offset(bitmap_block);
+  std::vector<char> bitmap(block_size);
+  uint32_t block_bit_offset = get_block_bitmap_offset(block_num);
+  
+  if (!read_bytes(image, offset, bitmap.data(), block_size)) {
+    return false;
+  }
+
+  return test_bit(bitmap, block_bit_offset);
 }
 
 void Ext4FS::print_superblock() const {
@@ -482,94 +520,94 @@ void Ext4FS::print_gdt() const {
   }
 }
 
-void Ext4FS::print_inode(const inode &inode_in, uint32_t /*inode_num*/) const {
+void Ext4FS::print_inode(const inode &inode, uint32_t /*inode_num*/) const {
   const int w = 30;
   std::cout << std::left << std::setfill(' ');
 
-  std::cout << std::setw(w) << "i_mode:" << "0x" << std::hex << inode_in.i_mode
+  std::cout << std::setw(w) << "i_mode:" << "0x" << std::hex << inode.i_mode
             << std::dec << "\n";
-  std::cout << std::setw(w) << "i_uid:" << inode_in.i_uid << "\n";
-  std::cout << std::setw(w) << "i_size_lo:" << inode_in.i_size_lo << "\n";
-  std::cout << std::setw(w) << "i_atime:" << inode_in.i_atime << "\n";
-  std::cout << std::setw(w) << "i_ctime:" << inode_in.i_ctime << "\n";
-  std::cout << std::setw(w) << "i_mtime:" << inode_in.i_mtime << "\n";
-  std::cout << std::setw(w) << "i_dtime:" << inode_in.i_dtime << "\n";
-  std::cout << std::setw(w) << "i_gid:" << inode_in.i_gid << "\n";
-  std::cout << std::setw(w) << "i_links_count:" << inode_in.i_links_count
+  std::cout << std::setw(w) << "i_uid:" << inode.i_uid << "\n";
+  std::cout << std::setw(w) << "i_size_lo:" << inode.i_size_lo << "\n";
+  std::cout << std::setw(w) << "i_atime:" << inode.i_atime << "\n";
+  std::cout << std::setw(w) << "i_ctime:" << inode.i_ctime << "\n";
+  std::cout << std::setw(w) << "i_mtime:" << inode.i_mtime << "\n";
+  std::cout << std::setw(w) << "i_dtime:" << inode.i_dtime << "\n";
+  std::cout << std::setw(w) << "i_gid:" << inode.i_gid << "\n";
+  std::cout << std::setw(w) << "i_links_count:" << inode.i_links_count
             << "\n";
-  std::cout << std::setw(w) << "i_blocks_lo:" << inode_in.i_blocks_lo << "\n";
+  std::cout << std::setw(w) << "i_blocks_lo:" << inode.i_blocks_lo << "\n";
   std::cout << std::setw(w) << "i_flags:" << "0x" << std::hex
-            << inode_in.i_flags << std::dec << "\n";
+            << inode.i_flags << std::dec << "\n";
 
   std::cout << std::setw(w)
-            << "l_i_version:" << inode_in.osd1.linux1.l_i_version << "\n";
+            << "l_i_version:" << inode.osd1.linux1.l_i_version << "\n";
 
   std::cout << std::setw(w)
-            << "h_i_translator:" << inode_in.osd1.hurd1.h_i_translator << "\n";
+            << "h_i_translator:" << inode.osd1.hurd1.h_i_translator << "\n";
 
   std::cout << std::setw(w)
-            << "m_i_reserved1:" << inode_in.osd1.masix1.m_i_reserved1 << "\n";
+            << "m_i_reserved1:" << inode.osd1.masix1.m_i_reserved1 << "\n";
 
   std::cout << std::setw(w) << "i_block:" << "\n";
   for (int i = 0; i < 15; i++) {
-    std::cout << inode_in.i_block[i];
+    std::cout << inode.i_block[i];
   }
   std::cout << "\n";
 
-  std::cout << std::setw(w) << "i_generation:" << inode_in.i_generation << "\n";
-  std::cout << std::setw(w) << "i_file_acl_lo:" << inode_in.i_file_acl_lo
+  std::cout << std::setw(w) << "i_generation:" << inode.i_generation << "\n";
+  std::cout << std::setw(w) << "i_file_acl_lo:" << inode.i_file_acl_lo
             << "\n";
-  std::cout << std::setw(w) << "i_size_high:" << inode_in.i_size_high << "\n";
-  std::cout << std::setw(w) << "i_obso_faddr:" << inode_in.i_obso_faddr << "\n";
+  std::cout << std::setw(w) << "i_size_high:" << inode.i_size_high << "\n";
+  std::cout << std::setw(w) << "i_obso_faddr:" << inode.i_obso_faddr << "\n";
 
   std::cout << std::setw(w)
-            << "l_i_blocks_high:" << inode_in.osd2.linux2.l_i_blocks_high
+            << "l_i_blocks_high:" << inode.osd2.linux2.l_i_blocks_high
             << "\n";
   std::cout << std::setw(w)
-            << "l_i_file_acl_high:" << inode_in.osd2.linux2.l_i_file_acl_high
+            << "l_i_file_acl_high:" << inode.osd2.linux2.l_i_file_acl_high
             << "\n";
   std::cout << std::setw(w)
-            << "l_i_uid_high:" << inode_in.osd2.linux2.l_i_uid_high << "\n";
+            << "l_i_uid_high:" << inode.osd2.linux2.l_i_uid_high << "\n";
   std::cout << std::setw(w)
-            << "l_i_gid_high:" << inode_in.osd2.linux2.l_i_gid_high << "\n";
+            << "l_i_gid_high:" << inode.osd2.linux2.l_i_gid_high << "\n";
   std::cout << std::setw(w) << "l_i_checksum_lo:" << "0x" << std::hex
-            << inode_in.osd2.linux2.l_i_checksum_lo << std::dec << "\n";
+            << inode.osd2.linux2.l_i_checksum_lo << std::dec << "\n";
   std::cout << std::setw(w)
-            << "l_i_reserved:" << inode_in.osd2.linux2.l_i_reserved << "\n";
+            << "l_i_reserved:" << inode.osd2.linux2.l_i_reserved << "\n";
 
   std::cout << std::setw(w)
-            << "h_i_reserved1:" << inode_in.osd2.hurd2.h_i_reserved1 << "\n";
+            << "h_i_reserved1:" << inode.osd2.hurd2.h_i_reserved1 << "\n";
   std::cout << std::setw(w)
-            << "h_i_mode_high:" << inode_in.osd2.hurd2.h_i_mode_high << "\n";
+            << "h_i_mode_high:" << inode.osd2.hurd2.h_i_mode_high << "\n";
   std::cout << std::setw(w)
-            << "h_i_uid_high:" << inode_in.osd2.hurd2.h_i_uid_high << "\n";
+            << "h_i_uid_high:" << inode.osd2.hurd2.h_i_uid_high << "\n";
   std::cout << std::setw(w)
-            << "h_i_gid_high:" << inode_in.osd2.hurd2.h_i_gid_high << "\n";
-  std::cout << std::setw(w) << "h_i_author:" << inode_in.osd2.hurd2.h_i_author
+            << "h_i_gid_high:" << inode.osd2.hurd2.h_i_gid_high << "\n";
+  std::cout << std::setw(w) << "h_i_author:" << inode.osd2.hurd2.h_i_author
             << "\n";
 
   std::cout << std::setw(w)
-            << "m_i_reserved1:" << inode_in.osd2.masix2.m_i_reserved1 << "\n";
+            << "m_i_reserved1:" << inode.osd2.masix2.m_i_reserved1 << "\n";
   std::cout << std::setw(w)
-            << "m_i_file_acl_high:" << inode_in.osd2.masix2.m_i_file_acl_high
+            << "m_i_file_acl_high:" << inode.osd2.masix2.m_i_file_acl_high
             << "\n";
   std::cout << std::setw(w)
-            << "m_i_reserved2:" << inode_in.osd2.masix2.m_i_reserved2[0]
-            << inode_in.osd2.masix2.m_i_reserved2[1] << "\n";
+            << "m_i_reserved2:" << inode.osd2.masix2.m_i_reserved2[0]
+            << inode.osd2.masix2.m_i_reserved2[1] << "\n";
 
-  std::cout << std::setw(w) << "i_extra_isize:" << inode_in.i_extra_isize
+  std::cout << std::setw(w) << "i_extra_isize:" << inode.i_extra_isize
             << "\n";
   std::cout << std::setw(w) << "i_checksum_hi:" << "0x" << std::hex
-            << inode_in.i_checksum_hi << std::dec << "\n";
-  std::cout << std::setw(w) << "i_ctime_extra:" << inode_in.i_ctime_extra
+            << inode.i_checksum_hi << std::dec << "\n";
+  std::cout << std::setw(w) << "i_ctime_extra:" << inode.i_ctime_extra
             << "\n";
-  std::cout << std::setw(w) << "i_mtime_extra:" << inode_in.i_mtime_extra
+  std::cout << std::setw(w) << "i_mtime_extra:" << inode.i_mtime_extra
             << "\n";
-  std::cout << std::setw(w) << "i_atime_extra:" << inode_in.i_atime_extra
+  std::cout << std::setw(w) << "i_atime_extra:" << inode.i_atime_extra
             << "\n";
-  std::cout << std::setw(w) << "i_crtime:" << inode_in.i_crtime << "\n";
-  std::cout << std::setw(w) << "i_crtime_extra:" << inode_in.i_crtime_extra
+  std::cout << std::setw(w) << "i_crtime:" << inode.i_crtime << "\n";
+  std::cout << std::setw(w) << "i_crtime_extra:" << inode.i_crtime_extra
             << "\n";
-  std::cout << std::setw(w) << "i_version_hi:" << inode_in.i_version_hi << "\n";
-  std::cout << std::setw(w) << "i_projid:" << inode_in.i_projid << "\n";
+  std::cout << std::setw(w) << "i_version_hi:" << inode.i_version_hi << "\n";
+  std::cout << std::setw(w) << "i_projid:" << inode.i_projid << "\n";
 }
