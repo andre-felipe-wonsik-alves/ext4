@@ -579,29 +579,6 @@ uint64_t Ext4FS::alloc_blocks(uint64_t count, uint64_t& allocated_count) {
   return 0;
 }
 
-// write_inode: grava um inode de volta na posição correta da inode table
-bool Ext4FS::write_inode(uint32_t inode_num, const inode& inode_in) {
-  if (inode_num == 0 || inode_num > sb.s_inodes_count) {
-    std::cerr << "write_inode: número de inode inválido: " << inode_num << "\n";
-    return false;
-  }
-
-  uint32_t bg = get_inode_block_group(inode_num);
-  uint32_t index = get_inode_index(inode_num);
-
-  uint64_t inode_table_block = get_inode_table_block(bg);
-  uint64_t block_off = get_block_offset(inode_table_block);
-  uint64_t inode_off = block_off + static_cast<uint64_t>(index) * sb.s_inode_size;
-
-  // Usa const_cast para compatibilidade com write_bytes(void*) — não modifica dados
-  if (!write_bytes(image, inode_off, const_cast<inode*>(&inode_in), sizeof(inode))) {
-    std::cerr << "write_inode: erro ao escrever inode " << inode_num << "\n";
-    return false;
-  }
-
-  return true;
-}
-
 // write_extent_to_inode: insere ou estende um extent na extent tree do inode.
 // Estratégia:
 //   1. Coalescing: se o último extent folha termina exatamente no bloco anterior
@@ -670,7 +647,7 @@ bool Ext4FS::write_extent_to_inode(uint32_t inode_num, inode& inode_in,
         uint32_t new_len = static_cast<uint32_t>(last_len) + len;
         if (new_len <= 32767) {
           last.ee_len = static_cast<uint16_t>(new_len);
-          return write_inode(inode_num, inode_in);
+          return update_inode(inode_num, inode_in);
         }
         // Se excederia, cai no caminho normal de inserção abaixo
       }
@@ -684,7 +661,7 @@ bool Ext4FS::write_extent_to_inode(uint32_t inode_num, inode& inode_in,
       slot.ee_start_lo = static_cast<uint32_t>(phys_block & 0xFFFFFFFF);
       slot.ee_start_hi = static_cast<uint16_t>((phys_block >> 32) & 0xFFFF);
       hdr->eh_entries++;
-      return write_inode(inode_num, inode_in);
+      return update_inode(inode_num, inode_in);
     }
 
     // 3. Split: inline cheia → promove para depth == 1
@@ -713,40 +690,47 @@ bool Ext4FS::write_extent_to_inode(uint32_t inode_num, inode& inode_in,
 
     // Adiciona o novo extent no bloco externo
     ext4_extent& new_slot = leaf_exts[hdr->eh_entries];
-    new_slot.ee_block = logical_block;
-    new_slot.ee_len = len;
+    new_slot.ee_block    = logical_block;
+    new_slot.ee_len      = len;
     new_slot.ee_start_lo = static_cast<uint32_t>(phys_block & 0xFFFFFFFF);
     new_slot.ee_start_hi = static_cast<uint16_t>((phys_block >> 32) & 0xFFFF);
 
-    // Grava o bloco externo na imagem
+    // Monta o novo i_block (nó índice, depth == 1) em um buffer separado,
+    // ANTES de qualquer escrita na imagem. Assim, se write_bytes falhar,
+    // o inode na imagem ainda contém a árvore inline original intacta.
+    uint32_t new_iblock[15] = {};
+    ext4_extent_header* idx_hdr = reinterpret_cast<ext4_extent_header*>(new_iblock);
+    idx_hdr->eh_magic      = EXT4_EXT_MAGIC;
+    idx_hdr->eh_entries    = 1;
+    // Número máximo de índices inline:
+    // 60 bytes - 12 (header) = 48 bytes / 12 bytes por índice = 4 índices
+    idx_hdr->eh_max        = 4;
+    idx_hdr->eh_depth      = 1;
+    idx_hdr->eh_generation = 0;
+
+    ext4_extent_idx* idx = reinterpret_cast<ext4_extent_idx*>(idx_hdr + 1);
+    idx[0].ei_block    = 0; // bloco lógico inicial coberto por este índice
+    idx[0].ei_leaf_lo  = static_cast<uint32_t>(leaf_block & 0xFFFFFFFF);
+    idx[0].ei_leaf_hi  = static_cast<uint16_t>((leaf_block >> 32) & 0xFFFF);
+    idx[0].ei_unused   = 0;
+
+    // 1ª escrita: bloco folha externo.
+    // Se falhar, o inode na imagem ainda está com a árvore inline original;
+    // o único efeito colateral é o bloco alocado ficar marcado como usado
+    // sem conteúdo válido (bloco vazado), o que é inevitável sem journal.
     uint64_t leaf_block_offset = get_block_offset(leaf_block);
     if (!write_bytes(image, leaf_block_offset, leaf_buf.data(), block_size)) {
       std::cerr << "write_extent_to_inode: erro ao gravar bloco folha externo\n";
       return false;
     }
 
-    // Reescreve i_block como nó índice (depth == 1) apontando para leaf_block
-    // Zera i_block antes de remontar
+    // 2ª escrita: inode promovido para depth == 1.
+    // Só chegamos aqui se o bloco folha foi gravado com sucesso.
     for (int i = 0; i < 15; i++) {
-      inode_in.i_block[i] = 0;
+      inode_in.i_block[i] = new_iblock[i];
     }
 
-    ext4_extent_header* idx_hdr = reinterpret_cast<ext4_extent_header*>(inode_in.i_block);
-    idx_hdr->eh_magic = EXT4_EXT_MAGIC;
-    idx_hdr->eh_entries = 1;
-    // Número máximo de índices inline:
-    // 60 bytes - 12 (header) = 48 bytes / 12 bytes por índice = 4 índices
-    idx_hdr->eh_max = 4;
-    idx_hdr->eh_depth = 1;
-    idx_hdr->eh_generation = 0;
-
-    ext4_extent_idx* idx = reinterpret_cast<ext4_extent_idx*>(idx_hdr + 1);
-    idx[0].ei_block = 0; // bloco lógico inicial coberto por este índice
-    idx[0].ei_leaf_lo = static_cast<uint32_t>(leaf_block & 0xFFFFFFFF);
-    idx[0].ei_leaf_hi = static_cast<uint16_t>((leaf_block >> 32) & 0xFFFF);
-    idx[0].ei_unused = 0;
-
-    return write_inode(inode_num, inode_in);
+    return update_inode(inode_num, inode_in);
   }
 
   // árvore com depth == 1 (nó raiz em i_block com índices)
