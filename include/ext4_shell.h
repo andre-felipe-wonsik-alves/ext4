@@ -111,21 +111,20 @@ private:
    */
   void ialloc();
 
-  /**
-   * Aloca um ou mais blocos livres no SA e exibe os números alocados.
-   *
-   * @param count quantidade de blocos a alocar (default: 1)
-   */
-  void balloc(uint64_t count = 1);
-
-  /**
-   * Despacha a entrada do usuário para o comando correto.
-   * O primeiro token é o nome do comando; os demais são os argumentos.
-   *
-   * @param splitString vetor de tokens da linha de comando digitada pelo
-   * usuário
-   */
-  void dispatch(std::vector<std::string> splitString);
+    /**
+     * Aloca um ou mais blocos livres no SA e exibe os números alocados.
+     *
+     * @param count quantidade de blocos a alocar (default: 1)
+     */
+    void balloc(uint64_t count = 1);
+    
+    /**
+     * Despacha a entrada do usuário para o comando correto.
+     * O primeiro token é o nome do comando; os demais são os argumentos.
+     *
+     * @param splitString vetor de tokens da linha de comando digitada pelo usuário
+     */
+    void dispatch(std::vector<std::string> splitString);
 
   /**
    * Resolve um caminho (relativo ou absoluto) para o número de inode
@@ -143,6 +142,13 @@ private:
    * @param name nome do diretório a ser criado
    */
   void mkdir(const std::string &path);
+
+    /**
+     * Testa a funcionalidade de extents.
+     *
+     * @param args argumentos para o comando
+     */
+    void test_extent(const std::vector<std::string> &args);
 
 public:
   /**
