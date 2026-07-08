@@ -1544,6 +1544,17 @@ bool Ext4FS::write_dir_entry(uint32_t parent_inode_num, uint32_t new_inode_num,
 
     if (read_bytes(image, get_block_offset(target_phys_block), block_buf.data(),
                    block_size)) {
+      // Validação de Checksum antes de modificar
+      uint32_t calculated = checksum_dir(reinterpret_cast<char *>(sb.s_uuid), parent_inode_num, parent_inode.i_generation, block_buf.data(), block_size);
+      uint32_t stored_checksum = bytearray_to_int32_le(reinterpret_cast<unsigned char *>(block_buf.data() + block_size - 4));
+      if (calculated != stored_checksum) {
+        std::cerr << "\n[ERROR] Directory block checksum mismatch on disk before write!\n"
+                  << "Calculated Checksum: " << calculated << "\n"
+                  << "Stored Checksum:     " << stored_checksum << "\n"
+                  << "Skipping write to prevent corruption.\n\n";
+        return false;
+      }
+
       uint32_t offset = 0;
       ext4_dir_entry_2 *entry = nullptr;
 
@@ -1586,6 +1597,14 @@ bool Ext4FS::write_dir_entry(uint32_t parent_inode_num, uint32_t new_inode_num,
             std::memcpy(entry->name, name.c_str(), name.length());
           }
 
+          // Atualiza checksum antes de escrever
+          uint32_t new_calculated = checksum_dir(reinterpret_cast<char *>(sb.s_uuid), parent_inode_num, parent_inode.i_generation, block_buf.data(), block_size);
+          unsigned char *csum_ptr = reinterpret_cast<unsigned char *>(block_buf.data() + block_size - 4);
+          csum_ptr[0] = new_calculated & 0xFF;
+          csum_ptr[1] = (new_calculated >> 8) & 0xFF;
+          csum_ptr[2] = (new_calculated >> 16) & 0xFF;
+          csum_ptr[3] = (new_calculated >> 24) & 0xFF;
+
           if (!write_block_bytes(target_phys_block, block_buf))
             return false;
           space_found = true;
@@ -1610,6 +1629,14 @@ bool Ext4FS::write_dir_entry(uint32_t parent_inode_num, uint32_t new_inode_num,
     new_entry->name_len = static_cast<uint8_t>(name.length());
     new_entry->file_type = file_type;
     std::memcpy(new_entry->name, name.c_str(), name.length());
+
+    // Atualiza checksum antes de escrever o bloco novo
+    uint32_t new_calculated = checksum_dir(reinterpret_cast<char *>(sb.s_uuid), parent_inode_num, parent_inode.i_generation, block_buf.data(), block_size);
+    unsigned char *csum_ptr = reinterpret_cast<unsigned char *>(block_buf.data() + block_size - 4);
+    csum_ptr[0] = new_calculated & 0xFF;
+    csum_ptr[1] = (new_calculated >> 8) & 0xFF;
+    csum_ptr[2] = (new_calculated >> 16) & 0xFF;
+    csum_ptr[3] = (new_calculated >> 24) & 0xFF;
 
     if (!write_block_bytes(new_phys_block, block_buf))
       return false;
@@ -1767,6 +1794,17 @@ uint32_t Ext4FS::remove_dir_entry(uint32_t parent_inode_num,
         continue;
       }
 
+      // Validação de Checksum antes de modificar
+      uint32_t calculated = checksum_dir(reinterpret_cast<char *>(sb.s_uuid), parent_inode_num, parent_inode.i_generation, block_buf.data(), block_size);
+      uint32_t stored_checksum = bytearray_to_int32_le(reinterpret_cast<unsigned char *>(block_buf.data() + block_size - 4));
+      if (calculated != stored_checksum) {
+        std::cerr << "\n[ERROR] Directory block checksum mismatch on disk before write!\n"
+                  << "Calculated Checksum: " << calculated << "\n"
+                  << "Stored Checksum:     " << stored_checksum << "\n"
+                  << "Skipping write to prevent corruption.\n\n";
+        return 0;
+      }
+
       uint32_t offset = 0;
       ext4_dir_entry_2 *prev_entry = nullptr;
 
@@ -1787,6 +1825,14 @@ uint32_t Ext4FS::remove_dir_entry(uint32_t parent_inode_num,
             } else {
               entry->inode = 0;
             }
+
+            // Atualiza checksum antes de escrever
+            uint32_t new_calculated = checksum_dir(reinterpret_cast<char *>(sb.s_uuid), parent_inode_num, parent_inode.i_generation, block_buf.data(), block_size);
+            unsigned char *csum_ptr = reinterpret_cast<unsigned char *>(block_buf.data() + block_size - 4);
+            csum_ptr[0] = new_calculated & 0xFF;
+            csum_ptr[1] = (new_calculated >> 8) & 0xFF;
+            csum_ptr[2] = (new_calculated >> 16) & 0xFF;
+            csum_ptr[3] = (new_calculated >> 24) & 0xFF;
 
             if (!write_block_bytes(phys_block, block_buf)) {
               return 0;
