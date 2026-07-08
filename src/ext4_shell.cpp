@@ -313,11 +313,6 @@ void Ext4Shell::info() {
             << " ("
             << (total_inodes ? (used_inodes * 100.0 / total_inodes) : 0.0)
             << "%)\n";
-
-  std::cout << "\n==================================================\n";
-  std::cout << "           DETALHES DO SUPERBLOCO (RAW)           \n";
-  std::cout << "==================================================\n";
-  fs.print_superblock();
 }
 
 // pwd: exibe o caminho absoluto do diretório corrente
