@@ -379,6 +379,18 @@ bool Ext4FS::update_inode(uint32_t inode_num, const inode& inode_in) {
   return true;
 }
 
+bool Ext4FS::update_inode_size(uint32_t inode_num, inode& inode_in, uint64_t new_size) {
+  if (inode_num == 0 || inode_num > sb.s_inodes_count) {
+    std::cerr << "update_inode_size: número de inode inválido: " << inode_num << "\n";
+    return false;
+  }
+
+  inode_in.i_size_lo = static_cast<uint32_t>(new_size & 0xFFFFFFFFULL);
+  inode_in.i_size_high = static_cast<uint32_t>((new_size >> 32) & 0xFFFFFFFFULL);
+
+  return update_inode(inode_num, inode_in);
+}
+
 // alloc_inode: aloca o primeiro inode livre no SA, atualizando bitmaps e contadores
 uint32_t Ext4FS::alloc_inode() {
   /**
@@ -1088,11 +1100,7 @@ bool Ext4FS::write_to_file(uint32_t inode_num, inode& inode_in,
     uint64_t new_potential_size = (static_cast<uint64_t>(logical_block) * block_size) + buffer.size();
 
     if (current_size < new_potential_size) {
-        inode_in.i_size_lo = static_cast<uint32_t>(new_potential_size & 0xFFFFFFFF);
-        inode_in.i_size_high = static_cast<uint32_t>((new_potential_size >> 32) & 0xFFFFFFFF);
-        
-        // Sincroniza e persiste o inode modificado com os novos metadados na imagem de disco
-        if (!update_inode(inode_num, inode_in)) {
+        if (!update_inode_size(inode_num, inode_in, new_potential_size)) {
             std::cerr << "write_to_file: falha ao atualizar tamanho do inode no disco\n";
             return false;
         }

@@ -155,6 +155,15 @@ public:
     bool update_inode(uint32_t inode_num, const inode& inode_in);
 
     /**
+     * Atualiza o tamanho de um inode em memória e na imagem.
+     * @param inode_num: número do inode (base 1)
+     * @param inode_in: inode a ser atualizado
+     * @param new_size: novo tamanho do arquivo em bytes
+     * @returns true se a atualização foi bem-sucedida; false caso contrário
+     */
+    bool update_inode_size(uint32_t inode_num, inode& inode_in, uint64_t new_size);
+
+    /**
      * Aloca até 'count' blocos de dados livres e contíguos no SA.
      * Percorre os grupos em ordem e, dentro de cada grupo, busca a maior
      * sequência contígua de bits livres no bitmap, limitada a 'count'.
