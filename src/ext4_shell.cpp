@@ -251,6 +251,33 @@ uint32_t Ext4Shell::resolve_path(const std::string &path) {
   return fs.find_inode_by_path(path, curr_inode);
 }
 
+// is_safe_entry_path: valida se o caminho não contém "." ou ".." como componentes
+bool Ext4Shell::is_safe_entry_path(const std::string &path) const {
+  if (path.empty() || path == "." || path == ".." || path == "/") {
+    return false;
+  }
+
+  // Percorre cada componente do caminho, separando por '/'
+  size_t start = 0;
+  while (start <= path.size()) {
+    size_t end = path.find('/', start);
+    std::string component = path.substr(start, end - start);
+
+    // Rejeita componentes especiais "." e ".."
+    if (component == "." || component == "..") {
+      return false;
+    }
+
+    if (end == std::string::npos) {
+      break;
+    }
+
+    start = end + 1;
+  }
+
+  return true;
+}
+
 // info: exibe o resumo da imagem, do espaço do SA e o dump completo do
 // superbloco
 void Ext4Shell::info() {
@@ -551,8 +578,15 @@ void Ext4Shell::ext4_export(const std::string &source,
 
 // touch: cria um arquivo vazio no diretório corrente ou em um caminho absoluto
 void Ext4Shell::touch(const std::string &path) {
-  if (path.empty())
+  if (path.empty()) {
+    std::cout << "[!] Caminho vazio para o comando touch\n";
     return;
+  }
+
+  if (!is_safe_entry_path(path)) {
+    std::cout << "[!] Nome de entrada inválido. '.' e '..' não são permitidos.\n";
+    return;
+  }
 
   // Verifica se já existe
   if (resolve_path(path) != 0) {
@@ -589,8 +623,15 @@ void Ext4Shell::touch(const std::string &path) {
 
 // mkdir: cria um diretório vazio
 void Ext4Shell::mkdir(const std::string &path) {
-  if (path.empty())
+  if (path.empty()) {
+    std::cout << "[!] Caminho vazio para o comando mkdir\n";
     return;
+  }
+
+  if (!is_safe_entry_path(path)) {
+    std::cout << "[!] Nome de entrada inválido. '.' e '..' não são permitidos.\n";
+    return;
+  }
 
   if (resolve_path(path) != 0) {
     std::cout << "[!] Diretório ou arquivo já existe.\n";
@@ -626,6 +667,11 @@ void Ext4Shell::mkdir(const std::string &path) {
 
 // rm: remove um arquivo regular
 void Ext4Shell::rm(const std::string &path) {
+  if (!is_safe_entry_path(path)) {
+    std::cout << "[!] Caminho inválido. '.' e '..' não são permitidos.\n";
+    return;
+  }
+
   // Verifica se o arquivo existe e obtém seu inode
   uint32_t target_inode_num = resolve_path(path);
   if (target_inode_num == 0) {
@@ -663,6 +709,11 @@ void Ext4Shell::rm(const std::string &path) {
 
 // rmdir: remove um diretório se estiver vazio
 void Ext4Shell::rmdir(const std::string &path) {
+  if (!is_safe_entry_path(path)) {
+    std::cout << "[!] Caminho inválido. '.' e '..' não são permitidos.\n";
+    return;
+  }
+
   // Verifica se o diretório existe e obtém seu inode
   uint32_t target_inode_num = resolve_path(path);
   if (target_inode_num == 0) {
@@ -713,6 +764,17 @@ void Ext4Shell::rmdir(const std::string &path) {
 // rename: altera o nome de um arquivo/diretório
 void Ext4Shell::ext4_rename(const std::string &old_path,
                             const std::string &new_name) {
+  if (!is_safe_entry_path(old_path)) {
+    std::cout << "[!] Caminho de origem inválido. '.' e '..' não são permitidos.\n";
+    return;
+  }
+
+  if (new_name.empty() || new_name == "." || new_name == ".." ||
+      new_name.find('/') != std::string::npos) {
+    std::cout << "[!] Nome de destino inválido. '.' e '..' não são permitidos.\n";
+    return;
+  }
+
   // Verifica se o arquivo/diretório de origem existe
   uint32_t target_inode_num = resolve_path(old_path);
   if (target_inode_num == 0) {
@@ -752,6 +814,11 @@ void Ext4Shell::ext4_rename(const std::string &old_path,
 // ext4_import: importa um arquivo do SO real para o arquivo de imagem EXT4
 void Ext4Shell::ext4_import(const std::string &source,
                             const std::string &target) {
+  if (!is_safe_entry_path(target)) {
+    std::cout << "[!] Caminho de destino inválido. '.' e '..' não são permitidos.\n";
+    return;
+  }
+
   // 1. Abre o arquivo local do sistema operacional
   std::ifstream in(source, std::ios::binary | std::ios::ate);
   if (!in.is_open()) {

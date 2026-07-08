@@ -115,6 +115,15 @@ private:
   uint32_t resolve_path(const std::string &path);
 
   /**
+   * Valida se um caminho de entrada é seguro para operações de criação,
+   * remoção ou renomeação. Nomes especiais como "." e ".." são rejeitados.
+   *
+   * @param path caminho a ser validado
+   * @returns verdadeiro se o caminho não usa componentes especiais
+   */
+  bool is_safe_entry_path(const std::string &path) const;
+
+  /**
    * Cria um arquivo vazio.
    * @param path caminho do arquivo a ser criado
    */
