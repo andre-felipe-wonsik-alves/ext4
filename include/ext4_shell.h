@@ -14,13 +14,14 @@
 #include <string>
 #include <unordered_map>
 
-class Ext4Shell
-{
+class Ext4Shell {
 private:
-  Ext4FS fs;             // Instância do sistema de arquivos ext4
-  uint32_t curr_inode;   // Número do inode do diretório corrente (inicia em 2 = raiz)
-  std::string curr_path; // Caminho absoluto do diretório corrente (inicia em "/")
-  std::string img_path;  // Caminho da imagem de disco do EXT4
+  Ext4FS fs; // Instância do sistema de arquivos ext4
+  uint32_t
+      curr_inode; // Número do inode do diretório corrente (inicia em 2 = raiz)
+  std::string
+      curr_path; // Caminho absoluto do diretório corrente (inicia em "/")
+  std::string img_path; // Caminho da imagem de disco do EXT4
 
   // Mapa de nome de comando -> função handler; permite dispatch O(1)
   std::unordered_map<std::string,
@@ -120,7 +121,8 @@ private:
    * Despacha a entrada do usuário para o comando correto.
    * O primeiro token é o nome do comando; os demais são os argumentos.
    *
-   * @param splitString vetor de tokens da linha de comando digitada pelo usuário
+   * @param splitString vetor de tokens da linha de comando digitada pelo
+   * usuário
    */
   void dispatch(std::vector<std::string> splitString);
 
