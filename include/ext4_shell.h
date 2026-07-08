@@ -163,6 +163,8 @@ public:
    * até o encerramento do programa.
    */
   void run();
+
+  void test_touch(const std::string &path);
 };
 
 #endif

@@ -5,7 +5,6 @@
  * superbloco, da Group Descriptor Table (GDT), de inodes, do conteúdo de
  * arquivos e diretórios via extent tree.
  */
-
 #ifndef EXT4_UTILS_H
 #define EXT4_UTILS_H
 
@@ -39,6 +38,16 @@ private:
    * @returns true se a GDT foi lida com sucesso; false caso contrário
    */
   bool read_gdt();
+
+  /**
+   * @param inode_in: inode 
+   * @param logical_block: bloco lógico buscado
+   * @param out_phys_block: bloco físico já mapeado, se encontrado
+   * @param out_len: comprimento do extent encontrado
+   * @returns true se o bloco lógico já estiver mapeado; false caso contrário
+   */
+  bool find_mapped_block(const inode &inode_in, uint32_t logical_block,
+                         uint64_t &out_phys_block, uint16_t &out_len) const;
 
 public:
   Ext4FS() = default;
@@ -115,11 +124,8 @@ public:
   bool block_is_used(uint64_t block_num);
 
   /**
-   * Aloca o primeiro inode livre encontrado no SA.
-   * Percorre os grupos em ordem, lê o bitmap de inodes de cada grupo e
-   * marca o primeiro bit livre. Atualiza os contadores do GDT e do superbloco
-   * na imagem.
-   * @returns o número do inode alocado (>= 1), ou 0 em caso de falha
+   * Aloca o primeiro inode livre encontrado no SA
+   * @returns o número do inode alocado; 0 caso contrário
    */
   uint32_t alloc_inode();
 
@@ -170,44 +176,30 @@ public:
     bool update_inode_size(uint32_t inode_num, inode& inode_in, uint64_t new_size);
 
     /**
-     * Aloca até 'count' blocos de dados livres e contíguos no SA.
-     * Percorre os grupos em ordem e, dentro de cada grupo, busca a maior
-     * sequência contígua de bits livres no bitmap, limitada a 'count'.
-     * Marca todos os bits alocados de uma vez, atualizando os contadores
-     * do GDT e do superbloco na imagem.
+     * Aloca até 'count' blocos de dados livres e contíguos no SA
      * @param count: quantidade máxima de blocos contíguos a alocar
-     * @param allocated_count: (saída) quantidade de blocos efetivamente alocados
-     * @returns o número do primeiro bloco alocado (>= s_first_data_block),
-     *          ou 0 em caso de falha. allocated_count é 0 nesse caso.
+     * @param allocated_count: quantidade de blocos alocados
+     * @returns o número do primeiro bloco alocado; 0 caso contrário
      */
     uint64_t alloc_blocks(uint64_t count, uint64_t& allocated_count);
 
     /**
      * Escreve um inode de volta na imagem, no offset correto da inode table.
-     * @param inode_num: número do inode (base 1)
+     * @param inode_num: número do inode
      * @param inode_in: objeto inode com os dados a serem gravados
      * @returns true em caso de sucesso; false caso contrário
      */
     bool write_inode(uint32_t inode_num, const inode& inode_in);
 
     /**
-     * Insere um novo extent na extent tree de um inode, atualizando o inode
-     * na imagem. Tenta primeiro estender (coalescer) o último extent existente
-     * se o novo bloco físico for contíguo. Caso contrário, insere um novo extent.
+     * Insere um novo extent na extent tree de um inode
      *
-     * Para a extent tree inline (depth == 0):
-     *   - Se há espaço (eh_entries < eh_max), insere diretamente em i_block.
-     *   - Se a tree inline está cheia, aloca um bloco externo, move os extents
-     *     inline para ele e converte i_block em um nó índice (depth = 1).
      *
-     * A função NÃO aloca blocos de dados; o chamador deve ter alocado os blocos
-     * antes via alloc_blocks() e passar os números aqui.
-     *
-     * @param inode_num:    número do inode a ser atualizado
-     * @param inode_in:     inode lido; será atualizado em memória e na imagem
-     * @param logical_block: bloco lógico inicial do extent (ee_block)
-     * @param phys_block:    bloco físico inicial do extent (ee_start)
-     * @param len:           comprimento em blocos do extent (ee_len)
+     * @param inode_num: número do inode a ser atualizado
+     * @param inode_in: inode lido; será atualizado em memória e na imagem
+     * @param logical_block: bloco lógico inicial do extent
+     * @param phys_block: bloco físico inicial do extent
+     * @param len: comprimento em blocos do extent
      * @returns true em caso de sucesso; false caso contrário
      */
     bool write_extent_to_inode(uint32_t inode_num, inode& inode_in,
@@ -226,19 +218,40 @@ public:
     /**
      * Escreve dados em um bloco lógico de um arquivo, gereneciando alocação física,
      * atualização da árvore de extents e ajuste do tamanho do arquivo de forma consistente.
-     * * @param inode_num Número do inode do arquivo destino
+     * @param inode_num Número do inode do arquivo destino
      * @param inode_in Referência para a struct inode em memória
-     * @param logical_block O bloco lógico onde o dado deve começar (0 para o início)
+     * @param logical_block O bloco lógico onde o dado deve começar
      * @param buffer Vetor contendo os bytes brutos a serem escritos
      * @return true se toda a operação foi gravada e persistida com sucesso; false caso contrário
      */
     bool write_to_file(uint32_t inode_num, inode& inode_in, 
                        uint32_t logical_block, const std::vector<char>& buffer);
 
+  /** Localiza o inode bitmap e zera o bit de um inode e 
+   * atualiza os contadores de inodes livres na GDT e no SB
+   * @param inode_num Número do inode a ser removido
+   * @param is_dir indica se o inode pertencia a um diretório 
+   * @return true se o inode for removido; false caso contrário
+   */
+    bool free_inode(uint32_t inode_num, bool is_dir);
+
+  /** Localiza o block bitmap e zera os bits de count blocos, 
+   * atualiza os contadores de blocos livres na GDT e no SB
+   * @param inode_num número do inode a ser removido
+   * @param count quantidade de blocos contíguos a serem liberados 
+   * @return true se os blocos forem removidos; false caso contrário
+   */
+    bool free_blocks(uint64_t start_phys_block, uint64_t count);
+
     /**
-     * Imprime todos os campos do superbloco na saída padrão.
-     */
-    void print_superblock() const;
+   * Remove uma entrada de um diretório.
+   * @param parent_inode_num inode do diretório 
+   * @param target_name nome do arquivo ou diretório a ser removido
+   * @return inode do arquivo que acabou de ser removido da pasta; retorna 0 se o arquivo não for encontrado
+   */
+    uint32_t remove_dir_entry(uint32_t parent_inode_num, const std::string &target_name);
+
+    uint32_t find_inode_in_dir(uint32_t parent_inode_num, const std::string &name);
 
   /**
    * Imprime todos os campos do superbloco na saída padrão.
@@ -462,7 +475,6 @@ public:
     bitmap[byte_idx] &= ~(1 << bit_idx);
   }
 
-  // Helpers para campos hi/lo da GDT (uint16_t hi | uint16_t lo → uint32_t)
   /**
    * Retorna o número de inodes livres de um grupo de blocos.
    * @param bg: número do grupo de blocos
@@ -476,7 +488,6 @@ public:
 
   /**
    * Atualiza o contador de inodes livres de um grupo de blocos em memória.
-   * Divide 'val' nos campos hi (bits 31–16) e lo (bits 15–0).
    * @param bg: número do grupo de blocos
    * @param val: novo valor do contador
    */
@@ -488,7 +499,7 @@ public:
   }
 
   /**
-   * Retorna o número de blocos livres de um grupo de blocos.
+   * Retorna o número de blocos livres de um grupo de blocos
    * @param bg: número do grupo de blocos
    * @returns bg_free_blocks_count_hi << 16 | bg_free_blocks_count_lo
    */
@@ -499,7 +510,6 @@ public:
 
   /**
    * Atualiza o contador de blocos livres de um grupo de blocos em memória.
-   * Divide 'val' nos campos hi (bits 31–16) e lo (bits 15–0).
    * @param bg: número do grupo de blocos
    * @param val: novo valor do contador
    */
@@ -510,7 +520,7 @@ public:
   }
 
   /**
-   * Retorna o número de diretórios usados em um grupo de blocos.
+   * Retorna o número de diretórios usados em um grupo de blocos
    * @param bg: número do grupo de blocos
    * @returns bg_used_dirs_count_hi << 16 | bg_used_dirs_count_lo
    */
@@ -520,7 +530,7 @@ public:
   }
 
   /**
-   * Atualiza o contador de diretórios usados de um grupo de blocos em memória.
+   * Atualiza o contador de diretórios usados de um grupo de blocos em memória
    * @param bg: número do grupo de blocos
    * @param val: novo valor do contador
    */
@@ -529,12 +539,10 @@ public:
     gdt[bg].bg_used_dirs_count_hi = static_cast<uint16_t>((val >> 16) & 0xFFFF);
   }
 
-  // Helpers para cálculos de offset de grupos
   /**
    * Retorna o número do primeiro bloco de dados de um grupo de blocos.
-   * Equivale a: bg * s_blocks_per_group + s_first_data_block
    * @param bg: número do grupo de blocos
-   * @returns primeiro bloco absoluto do grupo
+   * @returns primeiro bloco do grupo
    */
   inline uint64_t get_group_first_block(uint64_t bg) const {
     return static_cast<uint64_t>(bg) * sb.s_blocks_per_group +
@@ -543,10 +551,8 @@ public:
 
   /**
    * Converte um índice local de bloco dentro de um grupo para número absoluto.
-   * Equivale a: get_group_first_block(bg) + local_idx
    * @param bg: número do grupo de blocos
-   * @param local_idx: índice do bloco dentro do grupo (0-based, relativo ao
-   * bitmap)
+   * @param local_idx: índice do bloco dentro do grupo
    * @returns número absoluto do bloco
    */
   inline uint64_t get_abs_block(uint64_t bg, uint32_t local_idx) const {
@@ -564,15 +570,11 @@ public:
   }
 
   /**
-   * Insere uma nova entrada de diretório (dir_entry) no diretório pai.
-   * Localiza a última entrada do último bloco do diretório pai, ajusta seu
-   * rec_len para o tamanho real, e insere a nova entrada logo em seguida,
-   * absorvendo o espaço restante do bloco. Caso não haja espaço suficiente,
-   * aloca um novo bloco para o diretório pai.
+   * Insere uma nova entrada de diretório (dir_entry) no diretório pai. 
+   * Caso não haja espaço suficiente, aloca um novo bloco para o diretório pai.
    *
    * @param parent_inode_num: número do inode do diretório pai
-   * @param parent_inode: inode do diretório pai (referência, pode ser
-   *   modificado: i_links_count, timestamps, i_size_lo, extents)
+   * @param parent_inode: inode do diretório pai
    * @param new_inode_num: número do inode da nova entrada
    * @param name: nome da nova entrada
    * @param file_type: tipo do arquivo (EXT4_FT_DIR = 2, EXT4_FT_REG_FILE = 1,
@@ -583,18 +585,11 @@ public:
                        const std::string &name, uint8_t file_type);
 
   /**
-   * Cria um diretório
-   */
-  void create_dir(const std::string &parent_path, const std::string &name);
-
-  /**
    * Calcula rec_len da dir_entry
    */
   static inline uint16_t dir_ent_min_len(uint8_t name_len) {
     return (8 + name_len + 3) & ~3u; // round up to multiple of 4
   }
-
-  std::string join_parent_path(std::vector<std::string> tokens);
 };
 
 #endif
