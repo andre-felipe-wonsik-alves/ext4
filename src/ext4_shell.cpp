@@ -128,12 +128,6 @@ Ext4Shell::Ext4Shell(const std::string &img_path)
         ext4_import(args[0], args[1]);
       });
 
-    commandsMap.emplace(
-      "test_touch", [this](const std::vector<std::string> &args) -> void {
-          std::string filename = args.empty() ? "meu_teste.txt" : args[0];
-          test_touch(filename);
-      });
-
   // commandsMap.emplace(
   //     "ialloc",
   //     [this](const std::vector<std::string> &) -> void { ialloc(); });
@@ -612,98 +606,4 @@ void Ext4Shell::test_extent(const std::vector<std::string> &args) {
   }
 
   std::cout << "Sucesso! Bloco gravado, arvore mapeada e tamanho do inode atualizado.\n";
-}
-
-void Ext4Shell::test_touch(const std::string& path) {
-    uint32_t parent_inode_num = 2; // Forçando a gravação no Inode 2 (Diretório Raiz)
- 
-    std::cout << "[*] Iniciando teste de write_dir_entry...\n";
-
-    uint32_t existing_inode_num = fs.find_inode_in_dir(parent_inode_num, path);
-    if (existing_inode_num != 0) {
-        std::cout << "[!] Já existe uma entrada '" << path
-                  << "' no Inode " << parent_inode_num
-                  << " (Inode " << existing_inode_num << "). Abortando.\n";
-        return;
-    }
-
- 
-    // 1. Aloca um Inode novo
-    uint32_t new_inode_num = fs.alloc_inode();
-    if (new_inode_num == 0) {
-        std::cout << "[!] Falha ao alocar um novo inode.\n";
-        return;
-    }
-    std::cout << "[+] Inode alocado para o arquivo: " << new_inode_num << "\n";
- 
-    // 2. Preenche o novo Inode simulando um arquivo vazio (touch)
-    inode new_inode = {}; // Zera tudo por precaução
-    new_inode.i_mode = 0x8000 | 0644; // S_IFREG | rw-r--r--
-    new_inode.i_size_lo = 0;
-    new_inode.i_blocks_lo = 0;
-    new_inode.i_links_count = 1;
-    new_inode.i_flags = 0x80000;      // Usa extents
-    new_inode.i_mtime = time(NULL);
-    new_inode.i_ctime = time(NULL);
-    new_inode.i_atime = time(NULL);
- 
-    // Inicializa a árvore de extents (vazia) do arquivo novo
-    ext4_extent_header* hdr = reinterpret_cast<ext4_extent_header*>(new_inode.i_block);
-    hdr->eh_magic = 0xF30A;
-    hdr->eh_entries = 0;
-    hdr->eh_max = 4;
-    hdr->eh_depth = 0;
- 
-    // Salva o inode novo no disco
-    if (!fs.update_inode(new_inode_num, new_inode)) {
-        std::cout << "[!] Erro ao persistir o novo inode.\n";
-        return;
-    }
- 
-    // 3. Escreve a entrada no diretório pai (Inode 2)
-    std::cout << "[*] Escrevendo '" << path << "' no Inode 2...\n";
-    if (!fs.write_dir_entry(parent_inode_num, new_inode_num, path, 1)) { // 1 = EXT4_FT_REG_FILE
-        std::cout << "[!] Erro na função write_dir_entry!\n";
-        return;
-    }
-    std::cout << "[+] write_dir_entry retornou sucesso!\n";
- 
-    // 4. VERIFICAÇÃO: Lê o conteúdo do Inode 2 e imprime na tela
-    std::cout << "\n============================================\n";
-    std::cout << " LENDO O CONTEÚDO BRUTO DO INODE 2 (RAIZ)\n";
-    std::cout << "============================================\n";
-    
-    inode parent_inode;
-    if (!fs.read_inode(parent_inode_num, parent_inode)) {
-        std::cout << "[!] Erro ao ler o inode " << parent_inode_num << " para verificação.\n";
-        return;
-    }
- 
-    std::vector<char> dir_content = fs.read_inode_content(parent_inode);
- 
-    if (dir_content.empty()) {
-        std::cout << "[!] Diretório vazio ou erro ao ler o conteúdo do Inode 2.\n";
-        return;
-    }
- 
-    uint32_t offset = 0;
-    while (offset < dir_content.size()) {
-        ext4_dir_entry_2* entry = reinterpret_cast<ext4_dir_entry_2*>(dir_content.data() + offset);
-        
-        if (entry->rec_len == 0) break; // Prevenção de loop infinito
- 
-        // Se o inode for > 0, a entrada é válida (não foi apagada)
-        if (entry->inode != 0) {
-            std::string name(entry->name, entry->name_len);
-            std::cout << " -> Inode: " << std::setw(4) << entry->inode 
-                      << " | rec_len: " << std::setw(4) << entry->rec_len 
-                      << " | Tipo: " << (int)entry->file_type 
-                      << " | Nome: " << name << "\n";
-        } else {
-            std::cout << " -> [ENTRADA DELETADA] | rec_len: " << entry->rec_len << "\n";
-        }
- 
-        offset += entry->rec_len;
-    }
-    std::cout << "============================================\n";
 }
