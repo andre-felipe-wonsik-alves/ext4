@@ -167,29 +167,6 @@ Ext4Shell::Ext4Shell(const std::string &img_path)
         }
         ext4_import(args[0], args[1]);
       });
-
-  // commandsMap.emplace(
-  //     "ialloc",
-  //     [this](const std::vector<std::string> &) -> void { ialloc(); });
-
-  // commandsMap.emplace(
-  //     "balloc", [this](const std::vector<std::string> &args) -> void {
-  //       uint64_t count = 1;
-  //       if (!args.empty()) {
-  //         try {
-  //           count = std::stoull(args[0]);
-  //         } catch (const std::exception &) {
-  //           std::cout << "[!] Argumento inválido para balloc; usando
-  //           count=1\n";
-  //         }
-  //       }
-  //       balloc(count);
-  //     });
-
-  // commandsMap.emplace(
-  //     "test_extent", [this](const std::vector<std::string> &args) -> void {
-  //         test_extent(args);
-  //     });
 }
 
 // run: loop principal — lê input, tokeniza e despacha para o comando correto
@@ -853,69 +830,4 @@ void Ext4Shell::ext4_import(const std::string &source,
   } else {
     std::cout << "[!] Ocorreu um erro durante a escrita dos blocos no EXT4.\n";
   }
-}
-
-// ialloc: aloca um inode livre e exibe o número alocado
-void Ext4Shell::ialloc() {
-  uint32_t inode_num = fs.alloc_inode();
-  if (inode_num == 0) {
-    std::cout << "[!] Não foi possível alocar um inode livre\n";
-    return;
-  }
-  std::cout << "[*] Inode alocado: " << inode_num << "\n";
-}
-
-// balloc: aloca count blocos livres e exibe os números alocados
-void Ext4Shell::balloc(uint64_t count) {
-  if (count == 0) {
-    std::cout << "[!] Count deve ser maior que 0\n";
-    return;
-  }
-
-  uint64_t allocated_count = 0;
-  uint64_t first_block = fs.alloc_blocks(count, allocated_count);
-
-  if (first_block == 0) {
-    std::cout << "[!] Não foi possível alocar blocos livres\n";
-    return;
-  }
-
-  std::cout << "[*] " << allocated_count
-            << " bloco(s) alocado(s) a partir do bloco " << first_block << "\n";
-  for (uint64_t k = 0; k < allocated_count; k++) {
-    std::cout << "    " << first_block + k << "\n";
-  }
-}
-
-void Ext4Shell::test_extent(const std::vector<std::string> &args) {
-  if (args.size() < 2) {
-    std::cout << "Uso: test_extent <inode_num> <logical_block>\n";
-    return;
-  }
-
-  uint32_t inode_num = std::stoul(args[0]);
-  uint32_t logical_block = std::stoul(args[1]);
-
-  inode file_inode;
-  if (!fs.read_inode(inode_num, file_inode)) {
-    std::cout << "Erro ao ler o inode " << inode_num << ".\n";
-    return;
-  }
-
-  // 1. Mensagem de teste que será gravada no bloco do arquivo
-  std::string test_message = "Testando Extent: RECEBA!\n";
-  std::vector<char> buffer(test_message.begin(), test_message.end());
-
-  std::cout << "Executando escrita segura no inode " << inode_num
-            << ", bloco logico " << logical_block << "...\n";
-
-  // 2. CHAMADA UNIFICADA: Toda a mágica de alocação física, árvore de extents e
-  // tamanho acontece aqui!
-  if (!fs.write_to_file(inode_num, file_inode, logical_block, buffer)) {
-    std::cout << "Erro ao executar a rotina de escrita write_to_file.\n";
-    return;
-  }
-
-  std::cout << "Sucesso! Bloco gravado, arvore mapeada e tamanho do inode "
-               "atualizado.\n";
 }

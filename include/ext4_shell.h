@@ -97,18 +97,6 @@ private:
   void pwd();
 
   /**
-   * Aloca um inode livre no SA e exibe o número do inode alocado.
-   */
-  void ialloc();
-
-  /**
-   * Aloca um ou mais blocos livres no SA e exibe os números alocados.
-   *
-   * @param count quantidade de blocos a alocar (default: 1)
-   */
-  void balloc(uint64_t count = 1);
-
-  /**
    * Despacha a entrada do usuário para o comando correto.
    * O primeiro token é o nome do comando; os demais são os argumentos.
    *
@@ -126,13 +114,6 @@ private:
    * @returns o número do inode encontrado; 0 se o caminho não existe.
    */
   uint32_t resolve_path(const std::string &path);
-
-  /**
-   * Testa a funcionalidade de extents.
-   *
-   * @param args argumentos para o comando
-   */
-  void test_extent(const std::vector<std::string> &args);
 
   /**
    * Cria um arquivo vazio.
