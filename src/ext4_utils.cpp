@@ -379,6 +379,18 @@ bool Ext4FS::update_inode(uint32_t inode_num, const inode& inode_in) {
   return true;
 }
 
+bool Ext4FS::update_inode_size(uint32_t inode_num, inode& inode_in, uint64_t new_size) {
+  if (inode_num == 0 || inode_num > sb.s_inodes_count) {
+    std::cerr << "update_inode_size: número de inode inválido: " << inode_num << "\n";
+    return false;
+  }
+
+  inode_in.i_size_lo = static_cast<uint32_t>(new_size & 0xFFFFFFFFULL);
+  inode_in.i_size_high = static_cast<uint32_t>((new_size >> 32) & 0xFFFFFFFFULL);
+
+  return update_inode(inode_num, inode_in);
+}
+
 // alloc_inode: aloca o primeiro inode livre no SA, atualizando bitmaps e contadores
 uint32_t Ext4FS::alloc_inode() {
   /**
@@ -577,6 +589,99 @@ uint64_t Ext4FS::alloc_blocks(uint64_t count, uint64_t& allocated_count) {
 
   std::cerr << "alloc_blocks: sem blocos livres no SA\n";
   return 0;
+}
+
+// write_extent_to_inode: insere ou estende um extent na extent tree do inode.
+// Estratégia adaptada:
+//   1. Coalescing: se o último extent folha termina exatamente no bloco anterior
+//      ao novo (lógica e fisicamente contíguo), apenas incrementa ee_len.
+//   2. Inserção inline (depth == 0, entries < max): adiciona/substitui ext4_extent
+//      no i_block.
+//   3. Se estiver cheia (entries >= MAX_INLINE_EXTENTS) e não for caso de substituição,
+//      retorna false (limitação temporária).
+bool Ext4FS::write_extent_to_inode(uint32_t inode_num, inode& inode_in,
+                                   uint32_t logical_block,
+                                   uint64_t phys_block,
+                                   uint16_t len) {
+
+  // Validações básicas
+  if (inode_num == 0 || inode_num > sb.s_inodes_count) {
+    std::cerr << "write_extent_to_inode: inode_num inválido\n";
+    return false;
+  }
+  if (len == 0) {
+    std::cerr << "write_extent_to_inode: len == 0\n";
+    return false;
+  }
+
+  // Magic number da extent tree
+  static constexpr uint16_t EXT4_EXT_MAGIC = 0xF30A;
+  static constexpr uint16_t MAX_INLINE_EXTENTS = 4;
+
+  ext4_extent_header* hdr = reinterpret_cast<ext4_extent_header*>(inode_in.i_block);
+
+  // Inicializa a extent tree se o inode ainda não a tem 
+  if (hdr->eh_magic != EXT4_EXT_MAGIC) {
+    hdr->eh_magic = EXT4_EXT_MAGIC;
+    hdr->eh_entries = 0;
+    hdr->eh_max = MAX_INLINE_EXTENTS;
+    hdr->eh_depth = 0;
+    hdr->eh_generation = 0;
+  }
+
+  // árvore inline de folhas (depth == 0)
+  if (hdr->eh_depth == 0) {
+    ext4_extent* extents = reinterpret_cast<ext4_extent*>(hdr + 1);
+
+    // 1. Coalescing (Tenta agrupar com o último bloco se forem contíguos)
+    if (hdr->eh_entries > 0) {
+      ext4_extent& last = extents[hdr->eh_entries - 1];
+      uint64_t last_phys = get_extent_phys_block(last);
+      uint16_t last_len = last.ee_len;
+
+      bool logically_contiguous = (last.ee_block + last_len == logical_block);
+      bool physically_contiguous = (last_phys + last_len == phys_block);
+
+      if (logically_contiguous && physically_contiguous) {
+        uint32_t new_len = static_cast<uint32_t>(last_len) + len;
+        if (new_len <= 32767) {
+          last.ee_len = static_cast<uint16_t>(new_len);
+          return update_inode(inode_num, inode_in);
+        }
+      }
+    }
+
+    // 2. Procura se o bloco lógico já está mapeado (Caso de Substituição)
+    // Isso deve vir ANTES do teste de "bloco cheio", pois substituir não aumenta o número de entries!
+    for (uint16_t i = 0; i < hdr->eh_entries; i++) {
+      if (extents[i].ee_block == logical_block) {
+        extents[i].ee_len = len;
+        extents[i].ee_start_lo = static_cast<uint32_t>(phys_block & 0xFFFFFFFF);
+        extents[i].ee_start_hi = static_cast<uint16_t>((phys_block >> 32) & 0xFFFF);
+        return update_inode(inode_num, inode_in); // Atualiza memória e disco
+      }
+    }
+
+    // 3. Validação: Se NÃO foi substituição e já atingiu o limite de 4, retorna false
+    if (hdr->eh_entries >= MAX_INLINE_EXTENTS) {
+      std::cerr << "write_extent_to_inode: limite de extents inline atingido (máx 4). Split não suportado.\n";
+      return false;
+    }
+
+    // 4. Inserção de um NOVO extent inline (garantido que tem espaço)
+    ext4_extent& slot = extents[hdr->eh_entries];
+    slot.ee_block = logical_block;
+    slot.ee_len = len;
+    slot.ee_start_lo = static_cast<uint32_t>(phys_block & 0xFFFFFFFF);
+    slot.ee_start_hi = static_cast<uint16_t>((phys_block >> 32) & 0xFFFF);
+    hdr->eh_entries++;
+
+    return update_inode(inode_num, inode_in);
+  }
+
+  // Árvores com depth >= 1 não são suportadas nesta simplificação
+  std::cerr << "write_extent_to_inode: Árvores com depth > 0 não são suportadas.\n";
+  return false;
 }
 
 void Ext4FS::print_superblock() const {
@@ -941,4 +1046,65 @@ void Ext4FS::print_inode(const inode &inode_in, uint32_t /*inode_num*/) const {
             << "\n";
   std::cout << std::setw(w) << "i_version_hi:" << inode_in.i_version_hi << "\n";
   std::cout << std::setw(w) << "i_projid:" << inode_in.i_projid << "\n";
+}
+
+// write_block_bytes: escreve bytes em um bloco físico da imagem ext4
+bool Ext4FS::write_block_bytes(uint64_t phys_block, const std::vector<char>& buffer) {
+  if (!image.is_open()) {
+    return false;
+  }
+
+  uint64_t offset = get_block_offset(phys_block);
+
+  // Escreve até o limite do tamanho do bloco ou o tamanho do buffer enviado
+  uint64_t bytes_to_write = std::min(block_size, static_cast<uint64_t>(buffer.size()));
+
+  // Reutiliza o write_bytes de io_utils.h. 
+  // Como o buffer é const, usamos const_cast para casar com o ponteiro void*
+  return write_bytes(image, offset, const_cast<char*>(buffer.data()), bytes_to_write);
+}
+
+bool Ext4FS::write_to_file(uint32_t inode_num, inode& inode_in, 
+                           uint32_t logical_block, const std::vector<char>& buffer) {
+    // 1. Validações iniciais básicas
+    if (inode_num == 0 || !image.is_open() || buffer.empty()) {
+        std::cerr << "write_to_file: parâmetros inválidos ou imagem fechada\n";
+        return false;
+    }
+
+    // 2. Aloca um bloco físico livre no sistema de arquivos para receber o dado
+    uint64_t alloc_count = 0;
+    uint64_t phys_block = alloc_blocks(1, alloc_count);
+    if (phys_block == 0 || alloc_count == 0) {
+        std::cerr << "write_to_file: falha ao alocar bloco físico (sem espaço livre)\n";
+        return false;
+    }
+
+    // 3. GRAVAÇÃO FÍSICA: Escreve os bytes brutos no bloco alocado primeiro (Segurança contra quedas)
+    if (!write_block_bytes(phys_block, buffer)) {
+        std::cerr << "write_to_file: erro físico ao escrever dados no bloco " << phys_block << "\n";
+        return false;
+    }
+
+    // 4. MAPEAMENTO LÓGICO: Insere/atualiza o mapeamento na árvore de extents do Inode
+    uint16_t len = 1; // Estamos mapeando 1 bloco
+    if (!write_extent_to_inode(inode_num, inode_in, logical_block, phys_block, len)) {
+        std::cerr << "write_to_file: falha ao atualizar a árvore de extents do inode " << inode_num << "\n";
+        return false;
+    }
+
+    // 5. ATUALIZAÇÃO DE TAMANHO (CONSOLIDAÇÃO): Calcula se o arquivo cresceu com essa escrita
+    uint64_t current_size = get_file_size(inode_in);
+    
+    // O tamanho em potencial considera o início do bloco lógico selecionado + os bytes reais gravados ali
+    uint64_t new_potential_size = (static_cast<uint64_t>(logical_block) * block_size) + buffer.size();
+
+    if (current_size < new_potential_size) {
+        if (!update_inode_size(inode_num, inode_in, new_potential_size)) {
+            std::cerr << "write_to_file: falha ao atualizar tamanho do inode no disco\n";
+            return false;
+        }
+    }
+
+    return true;
 }
