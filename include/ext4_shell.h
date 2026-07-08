@@ -76,7 +76,6 @@ private:
 
   /**
    * Verifica se um bloco está livre ou ocupado no bitmap de blocos.
-   * (Não implementado)
    *
    * @param block_num número do bloco a verificar
    */
@@ -114,6 +113,15 @@ private:
    * @returns o número do inode encontrado; 0 se o caminho não existe.
    */
   uint32_t resolve_path(const std::string &path);
+
+  /**
+   * Valida se um caminho de entrada é seguro para operações de criação,
+   * remoção ou renomeação. Nomes especiais como "." e ".." são rejeitados.
+   *
+   * @param path caminho a ser validado
+   * @returns verdadeiro se o caminho não usa componentes especiais
+   */
+  bool is_safe_entry_path(const std::string &path) const;
 
   /**
    * Cria um arquivo vazio.

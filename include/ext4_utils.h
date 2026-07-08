@@ -78,7 +78,8 @@ public:
    * @param inode: objeto inode que representa um arquivo
    * @returns std::vector<char> contendo os bytes do arquivo
    */
-  std::vector<char> read_inode_content(const inode &inode);
+  std::vector<char> read_inode_content(const inode &inode,
+                                       uint32_t inode_num = 0);
 
   /**
    * Lê todo o conteúdo em uma extent tree
@@ -88,7 +89,8 @@ public:
    * @returns bool se os extents forem lidos com sucesso; false caso contrário
    */
   bool read_leaf_extents(const ext4_extent_header *header,
-                         std::vector<ext4_extent> &leaf_extents);
+                         std::vector<ext4_extent> &leaf_extents,
+                         uint32_t inode_num = 0, uint32_t inode_gen = 0);
 
   /**
    * Busca o número do inode correspondente a um caminho de arquivo
@@ -526,7 +528,7 @@ public:
   }
 
   /**
-   * Retorna o número de diretórios usados em um grupo de blocos
+   * Retorna o número de diretórios usados em um grupo de blocos.
    * @param bg: número do grupo de blocos
    * @returns bg_used_dirs_count_hi << 16 | bg_used_dirs_count_lo
    */
@@ -536,7 +538,7 @@ public:
   }
 
   /**
-   * Atualiza o contador de diretórios usados de um grupo de blocos em memória
+   * Atualiza o contador de diretórios usados de um grupo de blocos em memória.
    * @param bg: número do grupo de blocos
    * @param val: novo valor do contador
    */
