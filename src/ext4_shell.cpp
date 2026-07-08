@@ -4,13 +4,13 @@
 
 #include "ext4_shell.h"
 #include "io_utils.h"
+#include <algorithm>
 #include <ctime>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <string>
 #include <utility>
-#include <algorithm>
 
 // Construtor: inicializa o SA e registra os comandos no mapa de dispatch
 Ext4Shell::Ext4Shell(const std::string &img_path)
@@ -109,41 +109,45 @@ Ext4Shell::Ext4Shell(const std::string &img_path)
   commandsMap.emplace(
       "pwd", [this](const std::vector<std::string> &) -> void { pwd(); });
 
-  commandsMap.emplace(
-      "touch", [this](const std::vector<std::string> &args) -> void {
-        if (args.empty()) {
-          std::cout << "[!] Nome do arquivo precisa ser informado para o comando touch\n";
-          return;
-        }
-        touch(args[0]);
-      });
+  commandsMap.emplace("touch",
+                      [this](const std::vector<std::string> &args) -> void {
+                        if (args.empty()) {
+                          std::cout << "[!] Nome do arquivo precisa ser "
+                                       "informado para o comando touch\n";
+                          return;
+                        }
+                        touch(args[0]);
+                      });
 
-  commandsMap.emplace(
-      "mkdir", [this](const std::vector<std::string> &args) -> void {
-        if (args.empty()) {
-          std::cout << "[!] Nome do diretório precisa ser informado para o comando mkdir\n";
-          return;
-        }
-        mkdir(args[0]);
-      });
+  commandsMap.emplace("mkdir",
+                      [this](const std::vector<std::string> &args) -> void {
+                        if (args.empty()) {
+                          std::cout << "[!] Nome do diretório precisa ser "
+                                       "informado para o comando mkdir\n";
+                          return;
+                        }
+                        mkdir(args[0]);
+                      });
 
-  commandsMap.emplace(
-      "rm", [this](const std::vector<std::string> &args) -> void {
-        if (args.empty()) {
-          std::cout << "[!] Caminho do arquivo precisa ser informado para o comando rm\n";
-          return;
-        }
-        rm(args[0]);
-      });
+  commandsMap.emplace("rm",
+                      [this](const std::vector<std::string> &args) -> void {
+                        if (args.empty()) {
+                          std::cout << "[!] Caminho do arquivo precisa ser "
+                                       "informado para o comando rm\n";
+                          return;
+                        }
+                        rm(args[0]);
+                      });
 
-  commandsMap.emplace(
-      "rmdir", [this](const std::vector<std::string> &args) -> void {
-        if (args.empty()) {
-          std::cout << "[!] Caminho do diretório precisa ser informado para o comando rmdir\n";
-          return;
-        }
-        rmdir(args[0]);
-      });
+  commandsMap.emplace("rmdir",
+                      [this](const std::vector<std::string> &args) -> void {
+                        if (args.empty()) {
+                          std::cout << "[!] Caminho do diretório precisa ser "
+                                       "informado para o comando rmdir\n";
+                          return;
+                        }
+                        rmdir(args[0]);
+                      });
 
   commandsMap.emplace(
       "rename", [this](const std::vector<std::string> &args) -> void {
@@ -157,7 +161,8 @@ Ext4Shell::Ext4Shell(const std::string &img_path)
   commandsMap.emplace(
       "import", [this](const std::vector<std::string> &args) -> void {
         if (args.size() < 2) {
-          std::cout << "[!] Origem (SO) e destino (EXT4) precisam ser informados para o comando import\n";
+          std::cout << "[!] Origem (SO) e destino (EXT4) precisam ser "
+                       "informados para o comando import\n";
           return;
         }
         ext4_import(args[0], args[1]);
@@ -174,16 +179,17 @@ Ext4Shell::Ext4Shell(const std::string &img_path)
   //         try {
   //           count = std::stoull(args[0]);
   //         } catch (const std::exception &) {
-  //           std::cout << "[!] Argumento inválido para balloc; usando count=1\n";
+  //           std::cout << "[!] Argumento inválido para balloc; usando
+  //           count=1\n";
   //         }
   //       }
   //       balloc(count);
   //     });
 
-    // commandsMap.emplace(
-    //     "test_extent", [this](const std::vector<std::string> &args) -> void {
-    //         test_extent(args);
-    //     });
+  // commandsMap.emplace(
+  //     "test_extent", [this](const std::vector<std::string> &args) -> void {
+  //         test_extent(args);
+  //     });
 }
 
 // run: loop principal — lê input, tokeniza e despacha para o comando correto
@@ -232,10 +238,10 @@ void Ext4Shell::dispatch(std::vector<std::string> splitString) {
 // commands: lista todos os comandos registrados no mapa
 void Ext4Shell::commands() {
   std::cout << "Comandos disponiveis:\n";
-  
+
   // 1. Copia apenas os nomes dos comandos para um vetor
   std::vector<std::string> sorted_names;
-  for (const auto& pair : commandsMap) {
+  for (const auto &pair : commandsMap) {
     sorted_names.push_back(pair.first);
   }
 
@@ -243,7 +249,7 @@ void Ext4Shell::commands() {
   std::sort(sorted_names.begin(), sorted_names.end());
 
   // 3. Exibe bonitinho
-  for (const auto& name : sorted_names) {
+  for (const auto &name : sorted_names) {
     std::cout << "  - " << name << "\n";
   }
 }
@@ -568,10 +574,10 @@ void Ext4Shell::ext4_export(const std::string &source,
             << content.size() << " bytes)\n";
 }
 
-
 // touch: cria um arquivo vazio no diretório corrente ou em um caminho absoluto
 void Ext4Shell::touch(const std::string &path) {
-  if (path.empty()) return;
+  if (path.empty())
+    return;
 
   // Verifica se já existe
   if (resolve_path(path) != 0) {
@@ -581,8 +587,12 @@ void Ext4Shell::touch(const std::string &path) {
 
   // Separa o nome do arquivo do caminho do diretório pai
   size_t last_slash = path.rfind('/');
-  std::string parent_path = (last_slash == std::string::npos) ? "." : (last_slash == 0 ? "/" : path.substr(0, last_slash));
-  std::string file_name = (last_slash == std::string::npos) ? path : path.substr(last_slash + 1);
+  std::string parent_path =
+      (last_slash == std::string::npos)
+          ? "."
+          : (last_slash == 0 ? "/" : path.substr(0, last_slash));
+  std::string file_name =
+      (last_slash == std::string::npos) ? path : path.substr(last_slash + 1);
 
   uint32_t parent_inode = resolve_path(parent_path);
   if (parent_inode == 0) {
@@ -591,18 +601,21 @@ void Ext4Shell::touch(const std::string &path) {
   }
 
   // Aloca um novo inode e adiciona a entrada de diretório via Ext4FS
-  uint32_t new_inode = fs.create_file_entry(parent_inode, file_name, 1); // 1 = arquivo regular no ext4_dir_entry_2
+  uint32_t new_inode = fs.create_file_entry(
+      parent_inode, file_name, 1); // 1 = arquivo regular no ext4_dir_entry_2
   if (new_inode == 0) {
     std::cout << "[!] Erro ao criar arquivo no sistema de arquivos.\n";
     return;
   }
 
-  std::cout << "[*] Arquivo '" << file_name << "' criado com sucesso (Inode " << new_inode << ").\n";
+  std::cout << "[*] Arquivo '" << file_name << "' criado com sucesso (Inode "
+            << new_inode << ").\n";
 }
 
 // mkdir: cria um diretório vazio
 void Ext4Shell::mkdir(const std::string &path) {
-  if (path.empty()) return;
+  if (path.empty())
+    return;
 
   if (resolve_path(path) != 0) {
     std::cout << "[!] Diretório ou arquivo já existe.\n";
@@ -611,8 +624,12 @@ void Ext4Shell::mkdir(const std::string &path) {
 
   // Separa o nome do diretório do caminho do diretório pai
   size_t last_slash = path.rfind('/');
-  std::string parent_path = (last_slash == std::string::npos) ? "." : (last_slash == 0 ? "/" : path.substr(0, last_slash));
-  std::string dir_name = (last_slash == std::string::npos) ? path : path.substr(last_slash + 1);
+  std::string parent_path =
+      (last_slash == std::string::npos)
+          ? "."
+          : (last_slash == 0 ? "/" : path.substr(0, last_slash));
+  std::string dir_name =
+      (last_slash == std::string::npos) ? path : path.substr(last_slash + 1);
 
   uint32_t parent_inode = resolve_path(parent_path);
   if (parent_inode == 0) {
@@ -620,14 +637,16 @@ void Ext4Shell::mkdir(const std::string &path) {
     return;
   }
 
-  // 2 = diretório no ext4_dir_entry_2. Deve inicializar com as entradas "." e ".." internamente
-  uint32_t new_inode = fs.create_file_entry(parent_inode, dir_name, 2); 
+  // 2 = diretório no ext4_dir_entry_2. Deve inicializar com as entradas "." e
+  // ".." internamente
+  uint32_t new_inode = fs.create_file_entry(parent_inode, dir_name, 2);
   if (new_inode == 0) {
     std::cout << "[!] Erro ao criar diretório.\n";
     return;
   }
 
-  std::cout << "[*] Diretório '" << dir_name << "' criado com sucesso (Inode " << new_inode << ").\n";
+  std::cout << "[*] Diretório '" << dir_name << "' criado com sucesso (Inode "
+            << new_inode << ").\n";
 }
 
 // rm: remove um arquivo regular
@@ -649,11 +668,16 @@ void Ext4Shell::rm(const std::string &path) {
 
   // Separa o nome do arquivo do caminho do diretório pai
   size_t last_slash = path.rfind('/');
-  std::string parent_path = (last_slash == std::string::npos) ? "." : (last_slash == 0 ? "/" : path.substr(0, last_slash));
-  std::string file_name = (last_slash == std::string::npos) ? path : path.substr(last_slash + 1);
+  std::string parent_path =
+      (last_slash == std::string::npos)
+          ? "."
+          : (last_slash == 0 ? "/" : path.substr(0, last_slash));
+  std::string file_name =
+      (last_slash == std::string::npos) ? path : path.substr(last_slash + 1);
   uint32_t parent_inode = resolve_path(parent_path);
 
-  // fs.unlink_entry deve remover a entrada do diretório pai, liberar os blocos e o inode
+  // fs.unlink_entry deve remover a entrada do diretório pai, liberar os blocos
+  // e o inode
   if (!fs.unlink_entry(parent_inode, file_name, target_inode_num)) {
     std::cout << "[!] Erro ao remover o arquivo.\n";
     return;
@@ -693,11 +717,16 @@ void Ext4Shell::rmdir(const std::string &path) {
 
   // Separa o nome do diretório do caminho do diretório pai
   size_t last_slash = path.rfind('/');
-  std::string parent_path = (last_slash == std::string::npos) ? "." : (last_slash == 0 ? "/" : path.substr(0, last_slash));
-  std::string dir_name = (last_slash == std::string::npos) ? path : path.substr(last_slash + 1);
+  std::string parent_path =
+      (last_slash == std::string::npos)
+          ? "."
+          : (last_slash == 0 ? "/" : path.substr(0, last_slash));
+  std::string dir_name =
+      (last_slash == std::string::npos) ? path : path.substr(last_slash + 1);
   uint32_t parent_inode = resolve_path(parent_path);
 
-  // fs.unlink deve remover a entrada do diretório pai, liberar o inode e atualizar o bitmap
+  // fs.unlink deve remover a entrada do diretório pai, liberar o inode e
+  // atualizar o bitmap
   if (!fs.unlink_entry(parent_inode, dir_name, target_inode_num)) {
     std::cout << "[!] Erro ao remover o diretório.\n";
     return;
@@ -707,7 +736,8 @@ void Ext4Shell::rmdir(const std::string &path) {
 }
 
 // rename: altera o nome de um arquivo/diretório
-void Ext4Shell::ext4_rename(const std::string &old_path, const std::string &new_name) {
+void Ext4Shell::ext4_rename(const std::string &old_path,
+                            const std::string &new_name) {
   // Verifica se o arquivo/diretório de origem existe
   uint32_t target_inode_num = resolve_path(old_path);
   if (target_inode_num == 0) {
@@ -717,31 +747,41 @@ void Ext4Shell::ext4_rename(const std::string &old_path, const std::string &new_
 
   // Verifica se o novo nome é válido (não deve conter barras)
   if (new_name.find('/') != std::string::npos) {
-    std::cout << "[!] O novo nome não deve conter barras (caminhos). O rename apenas renomeia localmente.\n";
+    std::cout << "[!] O novo nome não deve conter barras (caminhos). O rename "
+                 "apenas renomeia localmente.\n";
     return;
   }
 
   // Separa o nome do arquivo/diretório do caminho do diretório pai
   size_t last_slash = old_path.rfind('/');
-  std::string parent_path = (last_slash == std::string::npos) ? "." : (last_slash == 0 ? "/" : old_path.substr(0, last_slash));
-  std::string old_name = (last_slash == std::string::npos) ? old_path : old_path.substr(last_slash + 1);
+  std::string parent_path =
+      (last_slash == std::string::npos)
+          ? "."
+          : (last_slash == 0 ? "/" : old_path.substr(0, last_slash));
+  std::string old_name = (last_slash == std::string::npos)
+                             ? old_path
+                             : old_path.substr(last_slash + 1);
   uint32_t parent_inode = resolve_path(parent_path);
 
-  // fs.rename_entry busca a entrada antiga no diretório pai e atualiza a string de texto e name_len
+  // fs.rename_entry busca a entrada antiga no diretório pai e atualiza a string
+  // de texto e name_len
   if (!fs.rename_entry(parent_inode, old_name, new_name)) {
     std::cout << "[!] Erro ao renomear a entrada no diretório.\n";
     return;
   }
 
-  std::cout << "[*] Renomeado com sucesso: " << old_name << " -> " << new_name << "\n";
+  std::cout << "[*] Renomeado com sucesso: " << old_name << " -> " << new_name
+            << "\n";
 }
 
 // ext4_import: importa um arquivo do SO real para o arquivo de imagem EXT4
-void Ext4Shell::ext4_import(const std::string &source, const std::string &target) {
+void Ext4Shell::ext4_import(const std::string &source,
+                            const std::string &target) {
   // 1. Abre o arquivo local do sistema operacional
   std::ifstream in(source, std::ios::binary | std::ios::ate);
   if (!in.is_open()) {
-    std::cout << "[!] Não foi possível abrir o arquivo de origem no SO: " << source << "\n";
+    std::cout << "[!] Não foi possível abrir o arquivo de origem no SO: "
+              << source << "\n";
     return;
   }
 
@@ -755,13 +795,19 @@ void Ext4Shell::ext4_import(const std::string &source, const std::string &target
     return;
   }
 
-  // 2. Garante/Cria a entrada destino na imagem EXT4 usando a lógica semelhante ao touch
+  // 2. Garante/Cria a entrada destino na imagem EXT4 usando a lógica semelhante
+  // ao touch
   uint32_t target_inode_num = resolve_path(target);
 
   if (target_inode_num == 0) {
     size_t last_slash = target.rfind('/');
-    std::string parent_path = (last_slash == std::string::npos) ? "." : (last_slash == 0 ? "/" : target.substr(0, last_slash));
-    std::string file_name = (last_slash == std::string::npos) ? target : target.substr(last_slash + 1);
+    std::string parent_path =
+        (last_slash == std::string::npos)
+            ? "."
+            : (last_slash == 0 ? "/" : target.substr(0, last_slash));
+    std::string file_name = (last_slash == std::string::npos)
+                                ? target
+                                : target.substr(last_slash + 1);
 
     uint32_t parent_inode = resolve_path(parent_path);
     if (parent_inode == 0) {
@@ -778,11 +824,13 @@ void Ext4Shell::ext4_import(const std::string &source, const std::string &target
   }
 
   // 3. Reutiliza o método fs.write_to_file
-  // Ele vai iterar e salvar o buffer nos blocos lógicos usando a árvore de extents!
+  // Ele vai iterar e salvar o buffer nos blocos lógicos usando a árvore de
+  // extents!
   inode file_inode;
   fs.read_inode(target_inode_num, file_inode);
 
-  // Divide o buffer em blocos se necessário ou passa para a rotina write_to_file
+  // Divide o buffer em blocos se necessário ou passa para a rotina
+  // write_to_file
   uint32_t block_size = fs.get_block_size();
   uint32_t total_logical_blocks = (buffer.size() + block_size - 1) / block_size;
   bool success = true;
@@ -790,19 +838,23 @@ void Ext4Shell::ext4_import(const std::string &source, const std::string &target
   // Iteração sobre cada bloco lógico e escrita no EXT4
   for (uint32_t i = 0; i < total_logical_blocks; ++i) {
     size_t offset = i * block_size;
-    size_t chunk_size = std::min(static_cast<size_t>(block_size), buffer.size() - offset);
-    std::vector<char> sub_buffer(buffer.begin() + offset, buffer.begin() + offset + chunk_size);
+    size_t chunk_size =
+        std::min(static_cast<size_t>(block_size), buffer.size() - offset);
+    std::vector<char> sub_buffer(buffer.begin() + offset,
+                                 buffer.begin() + offset + chunk_size);
 
     if (!fs.write_to_file(target_inode_num, file_inode, i, sub_buffer)) {
       success = false;
       break;
     }
-    // Recarrega o inode atualizado para o próximo bloco ver o novo tamanho/árvore
-    fs.read_inode(target_inode_num, file_inode); 
+    // Recarrega o inode atualizado para o próximo bloco ver o novo
+    // tamanho/árvore
+    fs.read_inode(target_inode_num, file_inode);
   }
 
   if (success) {
-    std::cout << "[*] Importado com sucesso: " << source << " -> " << target << " (" << buffer.size() << " bytes)\n";
+    std::cout << "[*] Importado com sucesso: " << source << " -> " << target
+              << " (" << buffer.size() << " bytes)\n";
   } else {
     std::cout << "[!] Ocorreu um erro durante a escrita dos blocos no EXT4.\n";
   }
@@ -859,14 +911,16 @@ void Ext4Shell::test_extent(const std::vector<std::string> &args) {
   std::string test_message = "Testando Extent: RECEBA!\n";
   std::vector<char> buffer(test_message.begin(), test_message.end());
 
-  std::cout << "Executando escrita segura no inode " << inode_num 
+  std::cout << "Executando escrita segura no inode " << inode_num
             << ", bloco logico " << logical_block << "...\n";
 
-  // 2. CHAMADA UNIFICADA: Toda a mágica de alocação física, árvore de extents e tamanho acontece aqui!
+  // 2. CHAMADA UNIFICADA: Toda a mágica de alocação física, árvore de extents e
+  // tamanho acontece aqui!
   if (!fs.write_to_file(inode_num, file_inode, logical_block, buffer)) {
     std::cout << "Erro ao executar a rotina de escrita write_to_file.\n";
     return;
   }
 
-  std::cout << "Sucesso! Bloco gravado, arvore mapeada e tamanho do inode atualizado.\n";
+  std::cout << "Sucesso! Bloco gravado, arvore mapeada e tamanho do inode "
+               "atualizado.\n";
 }

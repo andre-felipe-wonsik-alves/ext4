@@ -40,7 +40,7 @@ private:
   bool read_gdt();
 
   /**
-   * @param inode_in: inode 
+   * @param inode_in: inode
    * @param logical_block: bloco lógico buscado
    * @param out_phys_block: bloco físico já mapeado, se encontrado
    * @param out_len: comprimento do extent encontrado
@@ -158,100 +158,106 @@ public:
    */
   bool update_block_bitmap(uint64_t bg, const std::vector<char> &bitmap);
 
-    /**
+  /**
    * Persiste um inode na tabela de inodes do seu grupo na imagem.
    * @param inode_num: número do inode (base 1)
    * @param inode_in: inode com os dados atualizados
    * @returns true se a escrita foi bem-sucedida; false caso contrário
    */
-  bool update_inode(uint32_t inode_num, const inode& inode_in);
+  bool update_inode(uint32_t inode_num, const inode &inode_in);
 
-    /**
-     * Atualiza o tamanho de um inode em memória e na imagem.
-     * @param inode_num: número do inode (base 1)
-     * @param inode_in: inode a ser atualizado
-     * @param new_size: novo tamanho do arquivo em bytes
-     * @returns true se a atualização foi bem-sucedida; false caso contrário
-     */
-    bool update_inode_size(uint32_t inode_num, inode& inode_in, uint64_t new_size);
+  /**
+   * Atualiza o tamanho de um inode em memória e na imagem.
+   * @param inode_num: número do inode (base 1)
+   * @param inode_in: inode a ser atualizado
+   * @param new_size: novo tamanho do arquivo em bytes
+   * @returns true se a atualização foi bem-sucedida; false caso contrário
+   */
+  bool update_inode_size(uint32_t inode_num, inode &inode_in,
+                         uint64_t new_size);
 
-    /**
-     * Aloca até 'count' blocos de dados livres e contíguos no SA
-     * @param count: quantidade máxima de blocos contíguos a alocar
-     * @param allocated_count: quantidade de blocos alocados
-     * @returns o número do primeiro bloco alocado; 0 caso contrário
-     */
-    uint64_t alloc_blocks(uint64_t count, uint64_t& allocated_count);
+  /**
+   * Aloca até 'count' blocos de dados livres e contíguos no SA
+   * @param count: quantidade máxima de blocos contíguos a alocar
+   * @param allocated_count: quantidade de blocos alocados
+   * @returns o número do primeiro bloco alocado; 0 caso contrário
+   */
+  uint64_t alloc_blocks(uint64_t count, uint64_t &allocated_count);
 
-    /**
-     * Escreve um inode de volta na imagem, no offset correto da inode table.
-     * @param inode_num: número do inode
-     * @param inode_in: objeto inode com os dados a serem gravados
-     * @returns true em caso de sucesso; false caso contrário
-     */
-    bool write_inode(uint32_t inode_num, const inode& inode_in);
+  /**
+   * Escreve um inode de volta na imagem, no offset correto da inode table.
+   * @param inode_num: número do inode
+   * @param inode_in: objeto inode com os dados a serem gravados
+   * @returns true em caso de sucesso; false caso contrário
+   */
+  bool write_inode(uint32_t inode_num, const inode &inode_in);
 
-    /**
-     * Insere um novo extent na extent tree de um inode
-     *
-     *
-     * @param inode_num: número do inode a ser atualizado
-     * @param inode_in: inode lido; será atualizado em memória e na imagem
-     * @param logical_block: bloco lógico inicial do extent
-     * @param phys_block: bloco físico inicial do extent
-     * @param len: comprimento em blocos do extent
-     * @returns true em caso de sucesso; false caso contrário
-     */
-    bool write_extent_to_inode(uint32_t inode_num, inode& inode_in,
-                               uint32_t logical_block,
-                               uint64_t phys_block,
-                               uint16_t len);
+  /**
+   * Insere um novo extent na extent tree de um inode
+   *
+   *
+   * @param inode_num: número do inode a ser atualizado
+   * @param inode_in: inode lido; será atualizado em memória e na imagem
+   * @param logical_block: bloco lógico inicial do extent
+   * @param phys_block: bloco físico inicial do extent
+   * @param len: comprimento em blocos do extent
+   * @returns true em caso de sucesso; false caso contrário
+   */
+  bool write_extent_to_inode(uint32_t inode_num, inode &inode_in,
+                             uint32_t logical_block, uint64_t phys_block,
+                             uint16_t len);
 
-    /**
-     * Escreve um buffer de dados diretamente em um bloco físico do sistema de arquivos.
-     * @param phys_block Número do bloco físico absoluto
-     * @param data Vetor de bytes a ser gravado
-     * @returns true se a escrita foi bem-sucedida; false caso contrário
-     */
-    bool write_block_bytes(uint64_t phys_block, const std::vector<char>& buffer);
+  /**
+   * Escreve um buffer de dados diretamente em um bloco físico do sistema de
+   * arquivos.
+   * @param phys_block Número do bloco físico absoluto
+   * @param data Vetor de bytes a ser gravado
+   * @returns true se a escrita foi bem-sucedida; false caso contrário
+   */
+  bool write_block_bytes(uint64_t phys_block, const std::vector<char> &buffer);
 
-    /**
-     * Escreve dados em um bloco lógico de um arquivo, gereneciando alocação física,
-     * atualização da árvore de extents e ajuste do tamanho do arquivo de forma consistente.
-     * @param inode_num Número do inode do arquivo destino
-     * @param inode_in Referência para a struct inode em memória
-     * @param logical_block O bloco lógico onde o dado deve começar
-     * @param buffer Vetor contendo os bytes brutos a serem escritos
-     * @return true se toda a operação foi gravada e persistida com sucesso; false caso contrário
-     */
-    bool write_to_file(uint32_t inode_num, inode& inode_in, 
-                       uint32_t logical_block, const std::vector<char>& buffer);
+  /**
+   * Escreve dados em um bloco lógico de um arquivo, gereneciando alocação
+   * física, atualização da árvore de extents e ajuste do tamanho do arquivo de
+   * forma consistente.
+   * @param inode_num Número do inode do arquivo destino
+   * @param inode_in Referência para a struct inode em memória
+   * @param logical_block O bloco lógico onde o dado deve começar
+   * @param buffer Vetor contendo os bytes brutos a serem escritos
+   * @return true se toda a operação foi gravada e persistida com sucesso; false
+   * caso contrário
+   */
+  bool write_to_file(uint32_t inode_num, inode &inode_in,
+                     uint32_t logical_block, const std::vector<char> &buffer);
 
-  /** Localiza o inode bitmap e zera o bit de um inode e 
+  /** Localiza o inode bitmap e zera o bit de um inode e
    * atualiza os contadores de inodes livres na GDT e no SB
    * @param inode_num Número do inode a ser removido
-   * @param is_dir indica se o inode pertencia a um diretório 
+   * @param is_dir indica se o inode pertencia a um diretório
    * @return true se o inode for removido; false caso contrário
    */
-    bool free_inode(uint32_t inode_num, bool is_dir);
+  bool free_inode(uint32_t inode_num, bool is_dir);
 
-  /** Localiza o block bitmap e zera os bits de count blocos, 
+  /** Localiza o block bitmap e zera os bits de count blocos,
    * atualiza os contadores de blocos livres na GDT e no SB
    * @param inode_num número do inode a ser removido
-   * @param count quantidade de blocos contíguos a serem liberados 
+   * @param count quantidade de blocos contíguos a serem liberados
    * @return true se os blocos forem removidos; false caso contrário
    */
-    bool free_blocks(uint64_t start_phys_block, uint64_t count);
+  bool free_blocks(uint64_t start_phys_block, uint64_t count);
 
-    /**
+  /**
    * Remove uma entrada de um diretório.
-   * @param parent_inode_num inode do diretório 
+   * @param parent_inode_num inode do diretório
    * @param target_name nome do arquivo ou diretório a ser removido
-   * @return inode do arquivo que acabou de ser removido da pasta; retorna 0 se o arquivo não for encontrado
+   * @return inode do arquivo que acabou de ser removido da pasta; retorna 0 se
+   * o arquivo não for encontrado
    */
-    uint32_t remove_dir_entry(uint32_t parent_inode_num, const std::string &target_name);
+  uint32_t remove_dir_entry(uint32_t parent_inode_num,
+                            const std::string &target_name);
 
-    uint32_t find_inode_in_dir(uint32_t parent_inode_num, const std::string &name);
+  uint32_t find_inode_in_dir(uint32_t parent_inode_num,
+                             const std::string &name);
 
   /**
    * Imprime todos os campos do superbloco na saída padrão.
@@ -570,7 +576,7 @@ public:
   }
 
   /**
-   * Insere uma nova entrada de diretório (dir_entry) no diretório pai. 
+   * Insere uma nova entrada de diretório (dir_entry) no diretório pai.
    * Caso não haja espaço suficiente, aloca um novo bloco para o diretório pai.
    *
    * @param parent_inode_num: número do inode do diretório pai

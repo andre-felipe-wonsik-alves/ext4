@@ -102,18 +102,19 @@ private:
   void ialloc();
 
   /**
-    * Aloca um ou mais blocos livres no SA e exibe os números alocados.
-    *
-    * @param count quantidade de blocos a alocar (default: 1)
-    */
+   * Aloca um ou mais blocos livres no SA e exibe os números alocados.
+   *
+   * @param count quantidade de blocos a alocar (default: 1)
+   */
   void balloc(uint64_t count = 1);
-    
+
   /**
-    * Despacha a entrada do usuário para o comando correto.
-    * O primeiro token é o nome do comando; os demais são os argumentos.
-    *
-    * @param splitString vetor de tokens da linha de comando digitada pelo usuário
-    */
+   * Despacha a entrada do usuário para o comando correto.
+   * O primeiro token é o nome do comando; os demais são os argumentos.
+   *
+   * @param splitString vetor de tokens da linha de comando digitada pelo
+   * usuário
+   */
   void dispatch(std::vector<std::string> splitString);
 
   /**
@@ -127,41 +128,41 @@ private:
   uint32_t resolve_path(const std::string &path);
 
   /**
-    * Testa a funcionalidade de extents.
-    *
-    * @param args argumentos para o comando
-    */
+   * Testa a funcionalidade de extents.
+   *
+   * @param args argumentos para o comando
+   */
   void test_extent(const std::vector<std::string> &args);
 
   /**
-    * Cria um arquivo vazio.
-    * @param path caminho do arquivo a ser criado
-    */
+   * Cria um arquivo vazio.
+   * @param path caminho do arquivo a ser criado
+   */
   void touch(const std::string &path);
 
   /**
-    * Cria um diretório vazio.
-    * @param path caminho do diretório a ser criado
-    */
+   * Cria um diretório vazio.
+   * @param path caminho do diretório a ser criado
+   */
   void mkdir(const std::string &path);
 
   /**
-    * Remove um arquivo regular.
-    * @param path caminho do arquivo a ser removido
-    */
+   * Remove um arquivo regular.
+   * @param path caminho do arquivo a ser removido
+   */
   void rm(const std::string &path);
 
   /**
-    * Remove um diretório, se estiver vazio.
-    * @param path caminho do diretório a ser removido
-    */
+   * Remove um diretório, se estiver vazio.
+   * @param path caminho do diretório a ser removido
+   */
   void rmdir(const std::string &path);
 
   /**
-    * Renomeia um arquivo ou diretório.
-    * @param old_path caminho atual
-    * @param new_name novo nome apenas (dentro do mesmo diretório)
-    */
+   * Renomeia um arquivo ou diretório.
+   * @param old_path caminho atual
+   * @param new_name novo nome apenas (dentro do mesmo diretório)
+   */
   void ext4_rename(const std::string &old_path, const std::string &new_name);
 
   /**
