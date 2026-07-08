@@ -109,45 +109,63 @@ Ext4Shell::Ext4Shell(const std::string &img_path)
   commandsMap.emplace(
       "pwd", [this](const std::vector<std::string> &) -> void { pwd(); });
 
-  commandsMap.emplace("import",
+  commandsMap.emplace("touch",
                       [this](const std::vector<std::string> &args) -> void {
-                        if (args.size() < 2) {
-                          std::cout << "[!] Origem e destino precisam ser "
-                                       "informados para o comando import\n";
+                        if (args.empty()) {
+                          std::cout << "[!] Nome do arquivo precisa ser "
+                                       "informado para o comando touch\n";
                           return;
                         }
-                        ext4_import(args[0], args[1]);
+                        touch(args[0]);
                       });
 
-  // commandsMap.emplace(
-  //     "ialloc",
-  //     [this](const std::vector<std::string> &) -> void { ialloc(); });
+  commandsMap.emplace("mkdir",
+                      [this](const std::vector<std::string> &args) -> void {
+                        if (args.empty()) {
+                          std::cout << "[!] Nome do diretório precisa ser "
+                                       "informado para o comando mkdir\n";
+                          return;
+                        }
+                        mkdir(args[0]);
+                      });
 
-  // commandsMap.emplace(
-  //     "balloc", [this](const std::vector<std::string> &args) -> void {
-  //       uint64_t count = 1;
-  //       if (!args.empty()) {
-  //         try {
-  //           count = std::stoull(args[0]);
-  //         } catch (const std::exception &) {
-  //           std::cout << "[!] Argumento inválido para balloc; usando
-  //           count=1\n";
-  //         }
-  //       }
-  //       balloc(count);
-  //     });
+  commandsMap.emplace("rm",
+                      [this](const std::vector<std::string> &args) -> void {
+                        if (args.empty()) {
+                          std::cout << "[!] Caminho do arquivo precisa ser "
+                                       "informado para o comando rm\n";
+                          return;
+                        }
+                        rm(args[0]);
+                      });
+
+  commandsMap.emplace("rmdir",
+                      [this](const std::vector<std::string> &args) -> void {
+                        if (args.empty()) {
+                          std::cout << "[!] Caminho do diretório precisa ser "
+                                       "informado para o comando rmdir\n";
+                          return;
+                        }
+                        rmdir(args[0]);
+                      });
 
   commandsMap.emplace(
-      "balloc", [this](const std::vector<std::string> &args) -> void {
-        uint64_t count = 1;
-        if (!args.empty()) {
-          try {
-            count = std::stoull(args[0]);
-          } catch (const std::exception &) {
-            std::cout << "[!] Argumento inválido para balloc; usando count=1\n";
-          }
+      "rename", [this](const std::vector<std::string> &args) -> void {
+        if (args.size() < 2) {
+          std::cout << "[!] Uso: rename <arquivo> <novo_nome>\n";
+          return;
         }
-        balloc(count);
+        ext4_rename(args[0], args[1]);
+      });
+
+  commandsMap.emplace(
+      "import", [this](const std::vector<std::string> &args) -> void {
+        if (args.size() < 2) {
+          std::cout << "[!] Origem (SO) e destino (EXT4) precisam ser "
+                       "informados para o comando import\n";
+          return;
+        }
+        ext4_import(args[0], args[1]);
       });
 }
 
@@ -272,11 +290,6 @@ void Ext4Shell::info() {
             << " ("
             << (total_inodes ? (used_inodes * 100.0 / total_inodes) : 0.0)
             << "%)\n";
-
-  std::cout << "\n==================================================\n";
-  std::cout << "           DETALHES DO SUPERBLOCO (RAW)           \n";
-  std::cout << "==================================================\n";
-  fs.print_superblock();
 }
 
 // pwd: exibe o caminho absoluto do diretório corrente
@@ -536,79 +549,288 @@ void Ext4Shell::ext4_export(const std::string &source,
             << content.size() << " bytes)\n";
 }
 
-// ext4_import: importa um arquivo do SO para a imagem ext4
-// (não implementado)
+// touch: cria um arquivo vazio no diretório corrente ou em um caminho absoluto
+void Ext4Shell::touch(const std::string &path) {
+  if (path.empty())
+    return;
+
+  // Verifica se já existe
+  if (resolve_path(path) != 0) {
+    std::cout << "[!] Arquivo ou diretório já existe.\n";
+    return;
+  }
+
+  // Separa o nome do arquivo do caminho do diretório pai
+  size_t last_slash = path.rfind('/');
+  std::string parent_path =
+      (last_slash == std::string::npos)
+          ? "."
+          : (last_slash == 0 ? "/" : path.substr(0, last_slash));
+  std::string file_name =
+      (last_slash == std::string::npos) ? path : path.substr(last_slash + 1);
+
+  uint32_t parent_inode = resolve_path(parent_path);
+  if (parent_inode == 0) {
+    std::cout << "[!] Diretório pai não encontrado.\n";
+    return;
+  }
+
+  // Aloca um novo inode e adiciona a entrada de diretório via Ext4FS
+  uint32_t new_inode = fs.create_file_entry(
+      parent_inode, file_name, 1); // 1 = arquivo regular no ext4_dir_entry_2
+  if (new_inode == 0) {
+    std::cout << "[!] Erro ao criar arquivo no sistema de arquivos.\n";
+    return;
+  }
+
+  std::cout << "[*] Arquivo '" << file_name << "' criado com sucesso (Inode "
+            << new_inode << ").\n";
+}
+
+// mkdir: cria um diretório vazio
+void Ext4Shell::mkdir(const std::string &path) {
+  if (path.empty())
+    return;
+
+  if (resolve_path(path) != 0) {
+    std::cout << "[!] Diretório ou arquivo já existe.\n";
+    return;
+  }
+
+  // Separa o nome do diretório do caminho do diretório pai
+  size_t last_slash = path.rfind('/');
+  std::string parent_path =
+      (last_slash == std::string::npos)
+          ? "."
+          : (last_slash == 0 ? "/" : path.substr(0, last_slash));
+  std::string dir_name =
+      (last_slash == std::string::npos) ? path : path.substr(last_slash + 1);
+
+  uint32_t parent_inode = resolve_path(parent_path);
+  if (parent_inode == 0) {
+    std::cout << "[!] Diretório pai não encontrado.\n";
+    return;
+  }
+
+  // 2 = diretório no ext4_dir_entry_2. Deve inicializar com as entradas "." e
+  // ".." internamente
+  uint32_t new_inode = fs.create_file_entry(parent_inode, dir_name, 2);
+  if (new_inode == 0) {
+    std::cout << "[!] Erro ao criar diretório.\n";
+    return;
+  }
+
+  std::cout << "[*] Diretório '" << dir_name << "' criado com sucesso (Inode "
+            << new_inode << ").\n";
+}
+
+// rm: remove um arquivo regular
+void Ext4Shell::rm(const std::string &path) {
+  // Verifica se o arquivo existe e obtém seu inode
+  uint32_t target_inode_num = resolve_path(path);
+  if (target_inode_num == 0) {
+    std::cout << "[!] Arquivo não encontrado.\n";
+    return;
+  }
+
+  // Verifica se o inode é um diretório; se for, sugere usar rmdir
+  inode target_inode;
+  fs.read_inode(target_inode_num, target_inode);
+  if (fs.inode_is_dir(target_inode)) {
+    std::cout << "[!] '" << path << "' é um diretório. Use rmdir.\n";
+    return;
+  }
+
+  // Separa o nome do arquivo do caminho do diretório pai
+  size_t last_slash = path.rfind('/');
+  std::string parent_path =
+      (last_slash == std::string::npos)
+          ? "."
+          : (last_slash == 0 ? "/" : path.substr(0, last_slash));
+  std::string file_name =
+      (last_slash == std::string::npos) ? path : path.substr(last_slash + 1);
+  uint32_t parent_inode = resolve_path(parent_path);
+
+  // fs.unlink_entry deve remover a entrada do diretório pai, liberar os blocos
+  // e o inode
+  if (!fs.unlink_entry(parent_inode, file_name, target_inode_num)) {
+    std::cout << "[!] Erro ao remover o arquivo.\n";
+    return;
+  }
+
+  std::cout << "[*] Arquivo '" << file_name << "' removido.\n";
+}
+
+// rmdir: remove um diretório se estiver vazio
+void Ext4Shell::rmdir(const std::string &path) {
+  // Verifica se o diretório existe e obtém seu inode
+  uint32_t target_inode_num = resolve_path(path);
+  if (target_inode_num == 0) {
+    std::cout << "[!] Diretório não encontrado.\n";
+    return;
+  }
+
+  // Não permite remover o diretório corrente ou a raiz
+  if (target_inode_num == curr_inode || target_inode_num == 2) {
+    std::cout << "[!] Não é possível remover o diretório corrente ou a raiz.\n";
+    return;
+  }
+
+  // Verifica se o inode é realmente um diretório
+  inode target_inode;
+  fs.read_inode(target_inode_num, target_inode);
+  if (!fs.inode_is_dir(target_inode)) {
+    std::cout << "[!] '" << path << "' não é um diretório.\n";
+    return;
+  }
+
+  // Verifica se o diretório está vazio (só possui "." e "..")
+  if (!fs.is_dir_empty(target_inode_num)) {
+    std::cout << "[!] Diretório não está vazio.\n";
+    return;
+  }
+
+  // Separa o nome do diretório do caminho do diretório pai
+  size_t last_slash = path.rfind('/');
+  std::string parent_path =
+      (last_slash == std::string::npos)
+          ? "."
+          : (last_slash == 0 ? "/" : path.substr(0, last_slash));
+  std::string dir_name =
+      (last_slash == std::string::npos) ? path : path.substr(last_slash + 1);
+  uint32_t parent_inode = resolve_path(parent_path);
+
+  // fs.unlink deve remover a entrada do diretório pai, liberar o inode e
+  // atualizar o bitmap
+  if (!fs.unlink_entry(parent_inode, dir_name, target_inode_num)) {
+    std::cout << "[!] Erro ao remover o diretório.\n";
+    return;
+  }
+
+  std::cout << "[*] Diretório '" << dir_name << "' removido.\n";
+}
+
+// rename: altera o nome de um arquivo/diretório
+void Ext4Shell::ext4_rename(const std::string &old_path,
+                            const std::string &new_name) {
+  // Verifica se o arquivo/diretório de origem existe
+  uint32_t target_inode_num = resolve_path(old_path);
+  if (target_inode_num == 0) {
+    std::cout << "[!] Arquivo/Diretório de origem não encontrado.\n";
+    return;
+  }
+
+  // Verifica se o novo nome é válido (não deve conter barras)
+  if (new_name.find('/') != std::string::npos) {
+    std::cout << "[!] O novo nome não deve conter barras (caminhos). O rename "
+                 "apenas renomeia localmente.\n";
+    return;
+  }
+
+  // Separa o nome do arquivo/diretório do caminho do diretório pai
+  size_t last_slash = old_path.rfind('/');
+  std::string parent_path =
+      (last_slash == std::string::npos)
+          ? "."
+          : (last_slash == 0 ? "/" : old_path.substr(0, last_slash));
+  std::string old_name = (last_slash == std::string::npos)
+                             ? old_path
+                             : old_path.substr(last_slash + 1);
+  uint32_t parent_inode = resolve_path(parent_path);
+
+  // fs.rename_entry busca a entrada antiga no diretório pai e atualiza a string
+  // de texto e name_len
+  if (!fs.rename_entry(parent_inode, old_name, new_name)) {
+    std::cout << "[!] Erro ao renomear a entrada no diretório.\n";
+    return;
+  }
+
+  std::cout << "[*] Renomeado com sucesso: " << old_name << " -> " << new_name
+            << "\n";
+}
+
+// ext4_import: importa um arquivo do SO real para o arquivo de imagem EXT4
 void Ext4Shell::ext4_import(const std::string &source,
                             const std::string &target) {
-  if (source.empty() || target.empty()) {
-    std::cout << "[!] Origem ou destino vazios\n";
-    return;
-  }
-  std::cout << "[!] ext4_import() não implementado. (Origem: " << source
-            << " -> Destino: " << target << ")\n";
-}
-
-// ialloc: aloca um inode livre e exibe o número alocado
-void Ext4Shell::ialloc() {
-  uint32_t inode_num = fs.alloc_inode();
-  if (inode_num == 0) {
-    std::cout << "[!] Não foi possível alocar um inode livre\n";
-    return;
-  }
-  std::cout << "[*] Inode alocado: " << inode_num << "\n";
-}
-
-// balloc: aloca count blocos livres e exibe os números alocados
-void Ext4Shell::balloc(uint64_t count) {
-  if (count == 0) {
-    std::cout << "[!] Count deve ser maior que 0\n";
+  // 1. Abre o arquivo local do sistema operacional
+  std::ifstream in(source, std::ios::binary | std::ios::ate);
+  if (!in.is_open()) {
+    std::cout << "[!] Não foi possível abrir o arquivo de origem no SO: "
+              << source << "\n";
     return;
   }
 
-  uint64_t allocated_count = 0;
-  uint64_t first_block = fs.alloc_blocks(count, allocated_count);
+  // Obtém o tamanho do arquivo e lê todo o conteúdo em um buffer
+  std::streamsize size = in.tellg();
+  in.seekg(0, std::ios::beg);
 
-  if (first_block == 0) {
-    std::cout << "[!] Não foi possível alocar blocos livres\n";
+  std::vector<char> buffer(static_cast<size_t>(size));
+  if (!in.read(buffer.data(), size)) {
+    std::cout << "[!] Erro ao ler o conteúdo do arquivo no SO.\n";
     return;
   }
 
-  std::cout << "[*] " << allocated_count
-            << " bloco(s) alocado(s) a partir do bloco " << first_block << "\n";
-  for (uint64_t k = 0; k < allocated_count; k++) {
-    std::cout << "    " << first_block + k << "\n";
+  // 2. Garante/Cria a entrada destino na imagem EXT4 usando a lógica semelhante
+  // ao touch
+  uint32_t target_inode_num = resolve_path(target);
+
+  if (target_inode_num == 0) {
+    size_t last_slash = target.rfind('/');
+    std::string parent_path =
+        (last_slash == std::string::npos)
+            ? "."
+            : (last_slash == 0 ? "/" : target.substr(0, last_slash));
+    std::string file_name = (last_slash == std::string::npos)
+                                ? target
+                                : target.substr(last_slash + 1);
+
+    uint32_t parent_inode = resolve_path(parent_path);
+    if (parent_inode == 0) {
+      std::cout << "[!] Diretório pai no EXT4 não existe.\n";
+      return;
+    }
+
+    // Cria o arquivo se ele não existir
+    target_inode_num = fs.create_file_entry(parent_inode, file_name, 1);
+    if (target_inode_num == 0) {
+      std::cout << "[!] Falha ao criar arquivo de destino na imagem.\n";
+      return;
+    }
   }
-}
 
-void Ext4Shell::test_extent(const std::vector<std::string> &args) {
-  if (args.size() < 2) {
-    std::cout << "Uso: test_extent <inode_num> <logical_block>\n";
-    return;
-  }
-
-  uint32_t inode_num = std::stoul(args[0]);
-  uint32_t logical_block = std::stoul(args[1]);
-
+  // 3. Reutiliza o método fs.write_to_file
+  // Ele vai iterar e salvar o buffer nos blocos lógicos usando a árvore de
+  // extents!
   inode file_inode;
-  if (!fs.read_inode(inode_num, file_inode)) {
-    std::cout << "Erro ao ler o inode " << inode_num << ".\n";
-    return;
+  fs.read_inode(target_inode_num, file_inode);
+
+  // Divide o buffer em blocos se necessário ou passa para a rotina
+  // write_to_file
+  uint32_t block_size = fs.get_block_size();
+  uint32_t total_logical_blocks = (buffer.size() + block_size - 1) / block_size;
+  bool success = true;
+
+  // Iteração sobre cada bloco lógico e escrita no EXT4
+  for (uint32_t i = 0; i < total_logical_blocks; ++i) {
+    size_t offset = i * block_size;
+    size_t chunk_size =
+        std::min(static_cast<size_t>(block_size), buffer.size() - offset);
+    std::vector<char> sub_buffer(buffer.begin() + offset,
+                                 buffer.begin() + offset + chunk_size);
+
+    if (!fs.write_to_file(target_inode_num, file_inode, i, sub_buffer)) {
+      success = false;
+      break;
+    }
+    // Recarrega o inode atualizado para o próximo bloco ver o novo
+    // tamanho/árvore
+    fs.read_inode(target_inode_num, file_inode);
   }
 
-  // 1. Mensagem de teste que será gravada no bloco do arquivo
-  std::string test_message = "Testando Extent: RECEBA!\n";
-  std::vector<char> buffer(test_message.begin(), test_message.end());
-
-  std::cout << "Executando escrita segura no inode " << inode_num
-            << ", bloco logico " << logical_block << "...\n";
-
-  // 2. CHAMADA UNIFICADA: Toda a mágica de alocação física, árvore de extents e
-  // tamanho acontece aqui!
-  if (!fs.write_to_file(inode_num, file_inode, logical_block, buffer)) {
-    std::cout << "Erro ao executar a rotina de escrita write_to_file.\n";
-    return;
+  if (success) {
+    std::cout << "[*] Importado com sucesso: " << source << " -> " << target
+              << " (" << buffer.size() << " bytes)\n";
+  } else {
+    std::cout << "[!] Ocorreu um erro durante a escrita dos blocos no EXT4.\n";
   }
-
-  std::cout << "Sucesso! Bloco gravado, arvore mapeada e tamanho do inode "
-               "atualizado.\n";
 }

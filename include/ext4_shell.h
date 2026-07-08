@@ -96,28 +96,6 @@ private:
   void pwd();
 
   /**
-   * Importa um arquivo do sistema de arquivos do SO para a imagem ext4.
-   * ("import" é palavra reservada em C++, daí o nome ext4_import)
-   * (Não implementado)
-   *
-   * @param source caminho do arquivo de origem no SO
-   * @param target caminho de destino na imagem ext4 (relativo ou absoluto)
-   */
-  void ext4_import(const std::string &source, const std::string &target);
-
-  /**
-   * Aloca um inode livre no SA e exibe o número do inode alocado.
-   */
-  void ialloc();
-
-  /**
-   * Aloca um ou mais blocos livres no SA e exibe os números alocados.
-   *
-   * @param count quantidade de blocos a alocar (default: 1)
-   */
-  void balloc(uint64_t count = 1);
-
-  /**
    * Despacha a entrada do usuário para o comando correto.
    * O primeiro token é o nome do comando; os demais são os argumentos.
    *
@@ -137,18 +115,45 @@ private:
   uint32_t resolve_path(const std::string &path);
 
   /**
-   * Cria um diretório com o nome especificado
-   *
-   * @param name nome do diretório a ser criado
+   * Cria um arquivo vazio.
+   * @param path caminho do arquivo a ser criado
+   */
+  void touch(const std::string &path);
+
+  /**
+   * Cria um diretório vazio.
+   * @param path caminho do diretório a ser criado
    */
   void mkdir(const std::string &path);
 
   /**
-   * Testa a funcionalidade de extents.
-   *
-   * @param args argumentos para o comando
+   * Remove um arquivo regular.
+   * @param path caminho do arquivo a ser removido
    */
-  void test_extent(const std::vector<std::string> &args);
+  void rm(const std::string &path);
+
+  /**
+   * Remove um diretório, se estiver vazio.
+   * @param path caminho do diretório a ser removido
+   */
+  void rmdir(const std::string &path);
+
+  /**
+   * Renomeia um arquivo ou diretório.
+   * @param old_path caminho atual
+   * @param new_name novo nome apenas (dentro do mesmo diretório)
+   */
+  void ext4_rename(const std::string &old_path, const std::string &new_name);
+
+  /**
+   * Importa um arquivo do sistema de arquivos do SO para a imagem ext4.
+   * ("import" é palavra reservada em C++, daí o nome ext4_import)
+   * (Não implementado)
+   *
+   * @param source caminho do arquivo de origem no SO
+   * @param target caminho de destino na imagem ext4 (relativo ou absoluto)
+   */
+  void ext4_import(const std::string &source, const std::string &target);
 
 public:
   /**

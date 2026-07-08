@@ -593,6 +593,45 @@ public:
                        const std::string &name, uint8_t file_type);
 
   /**
+   * Cria um novo inode regular ou de diretório e registra a entrada no
+   * diretório pai.
+   * @param parent_inode_num inode do diretório pai
+   * @param name nome da nova entrada
+   * @param file_type tipo da entrada (1 = arquivo, 2 = diretório)
+   * @returns inode criado, ou 0 em caso de erro
+   */
+  uint32_t create_file_entry(uint32_t parent_inode_num, const std::string &name,
+                             uint8_t file_type);
+
+  /**
+   * Remove uma entrada de diretório do diretório pai e libera o inode e os
+   * blocos associados.
+   * @param parent_inode_num inode do diretório pai
+   * @param target_name nome da entrada a ser removida
+   * @param target_inode_num inode alvo (opcional, usado pelo shell)
+   * @returns true se a entrada foi removida com sucesso; false caso contrário
+   */
+  bool unlink_entry(uint32_t parent_inode_num, const std::string &target_name,
+                    uint32_t target_inode_num);
+
+  /**
+   * Verifica se um diretório está vazio, considerando apenas "." e "..".
+   * @param inode_num inode do diretório
+   * @returns true se o diretório estiver vazio; false caso contrário
+   */
+  bool is_dir_empty(uint32_t inode_num);
+
+  /**
+   * Renomeia uma entrada de diretório no diretório pai.
+   * @param parent_inode_num inode do diretório pai
+   * @param old_name nome atual da entrada
+   * @param new_name novo nome da entrada
+   * @returns true se o rename foi bem-sucedido; false caso contrário
+   */
+  bool rename_entry(uint32_t parent_inode_num, const std::string &old_name,
+                    const std::string &new_name);
+
+  /**
    * Calcula rec_len da dir_entry
    */
   static inline uint16_t dir_ent_min_len(uint8_t name_len) {
