@@ -580,16 +580,13 @@ uint64_t Ext4FS::alloc_blocks(uint64_t count, uint64_t& allocated_count) {
 }
 
 // write_extent_to_inode: insere ou estende um extent na extent tree do inode.
-// Estratégia:
+// Estratégia adaptada:
 //   1. Coalescing: se o último extent folha termina exatamente no bloco anterior
 //      ao novo (lógica e fisicamente contíguo), apenas incrementa ee_len.
-//   2. Inserção inline (depth == 0, entries < max): adiciona ext4_extent no
-//      próximo slot livre de i_block.
-//   3. Split para depth == 1 (inline cheia): aloca um bloco externo, copia os
-//      extents folha existentes para ele, adiciona o novo extent no mesmo bloco
-//      e reescreve i_block como nó índice apontando para esse bloco.
-//   4. Inserção em depth == 1 existente: lê o bloco do último índice e insere
-//      o extent nele (ou retorna erro se esse bloco também estiver cheio).
+//   2. Inserção inline (depth == 0, entries < max): adiciona/substitui ext4_extent
+//      no i_block.
+//   3. Se estiver cheia (entries >= MAX_INLINE_EXTENTS) e não for caso de substituição,
+//      retorna false (limitação temporária).
 bool Ext4FS::write_extent_to_inode(uint32_t inode_num, inode& inode_in,
                                    uint32_t logical_block,
                                    uint64_t phys_block,
@@ -607,14 +604,6 @@ bool Ext4FS::write_extent_to_inode(uint32_t inode_num, inode& inode_in,
 
   // Magic number da extent tree
   static constexpr uint16_t EXT4_EXT_MAGIC = 0xF30A;
-
-  // Capacidade máxima de extents em um bloco externo
-  // (bloco inteiro menos o header, dividido pelo tamanho de cada extent)
-  uint64_t max_extents_in_block =
-      (block_size - sizeof(ext4_extent_header)) / sizeof(ext4_extent);
-
-  // Número máximo de extents inline em i_block:
-  // i_block tem 60 bytes = 1 header (12 bytes) + 4 × ext4_extent (12 bytes cada)
   static constexpr uint16_t MAX_INLINE_EXTENTS = 4;
 
   ext4_extent_header* hdr = reinterpret_cast<ext4_extent_header*>(inode_in.i_block);
@@ -632,366 +621,54 @@ bool Ext4FS::write_extent_to_inode(uint32_t inode_num, inode& inode_in,
   if (hdr->eh_depth == 0) {
     ext4_extent* extents = reinterpret_cast<ext4_extent*>(hdr + 1);
 
-    // 1. Coalescing
+    // 1. Coalescing (Tenta agrupar com o último bloco se forem contíguos)
     if (hdr->eh_entries > 0) {
       ext4_extent& last = extents[hdr->eh_entries - 1];
       uint64_t last_phys = get_extent_phys_block(last);
-      uint16_t last_len = last.ee_len; // sem uninitialized: ee_len <= 32768
+      uint16_t last_len = last.ee_len;
 
-      // Verifica contiguidade lógica e física
       bool logically_contiguous = (last.ee_block + last_len == logical_block);
       bool physically_contiguous = (last_phys + last_len == phys_block);
 
       if (logically_contiguous && physically_contiguous) {
-        // Não ultrapassa o limite de 32767 blocos num extent inicializado
         uint32_t new_len = static_cast<uint32_t>(last_len) + len;
         if (new_len <= 32767) {
           last.ee_len = static_cast<uint16_t>(new_len);
           return update_inode(inode_num, inode_in);
         }
-        // Se excederia, cai no caminho normal de inserção abaixo
       }
     }
 
-    // 2. Inserção / Substituição inline (há espaço)
-    if (hdr->eh_entries < hdr->eh_max) {
-      
-      // Procura se o bloco lógico já está mapeado na árvore inline
-      bool replaced = false;
-      for (uint16_t i = 0; i < hdr->eh_entries; i++) {
-        if (extents[i].ee_block == logical_block) {
-          // Substitui o mapeamento antigo pelo novo bloco físico do teste!
-          extents[i].ee_len = len;
-          extents[i].ee_start_lo = static_cast<uint32_t>(phys_block & 0xFFFFFFFF);
-          extents[i].ee_start_hi = static_cast<uint16_t>((phys_block >> 32) & 0xFFFF);
-          replaced = true;
-          break;
-        }
-      }
-
-      // Se não existia o bloco lógico, insere um novo no final normalmente
-      if (!replaced) {
-        ext4_extent& slot = extents[hdr->eh_entries];
-        slot.ee_block = logical_block;
-        slot.ee_len = len;
-        slot.ee_start_lo = static_cast<uint32_t>(phys_block & 0xFFFFFFFF);
-        slot.ee_start_hi = static_cast<uint16_t>((phys_block >> 32) & 0xFFFF);
-        hdr->eh_entries++;
-      }
-
-      return update_inode(inode_num, inode_in);
-    }
-
-    // 3. Split: inline cheia → promove para depth == 1
-    // Aloca um bloco externo para armazenar os extents folha
-    uint64_t alloc_count = 0;
-    uint64_t leaf_block  = alloc_blocks(1, alloc_count);
-    if (leaf_block == 0 || alloc_count == 0) {
-      std::cerr << "write_extent_to_inode: sem blocos livres para split da extent tree\n";
-      return false;
-    }
-
-    // Monta o conteúdo do bloco externo em memória
-    std::vector<char> leaf_buf(block_size, 0);
-    ext4_extent_header* leaf_hdr = reinterpret_cast<ext4_extent_header*>(leaf_buf.data());
-    leaf_hdr->eh_magic = EXT4_EXT_MAGIC;
-    leaf_hdr->eh_entries = hdr->eh_entries + 1; // extents existentes + novo
-    leaf_hdr->eh_max = static_cast<uint16_t>(max_extents_in_block);
-    leaf_hdr->eh_depth = 0;
-    leaf_hdr->eh_generation = 0;
-
-    // Copia os extents inline para o bloco externo
-    ext4_extent* leaf_exts = reinterpret_cast<ext4_extent*>(leaf_hdr + 1);
+    // 2. Procura se o bloco lógico já está mapeado (Caso de Substituição)
+    // Isso deve vir ANTES do teste de "bloco cheio", pois substituir não aumenta o número de entries!
     for (uint16_t i = 0; i < hdr->eh_entries; i++) {
-      leaf_exts[i] = extents[i];
-    }
-
-    // Adiciona o novo extent no bloco externo
-    ext4_extent& new_slot = leaf_exts[hdr->eh_entries];
-    new_slot.ee_block = logical_block;
-    new_slot.ee_len = len;
-    new_slot.ee_start_lo = static_cast<uint32_t>(phys_block & 0xFFFFFFFF);
-    new_slot.ee_start_hi = static_cast<uint16_t>((phys_block >> 32) & 0xFFFF);
-
-    // Monta o novo i_block (nó índice, depth == 1) em um buffer separado,
-    // ANTES de qualquer escrita na imagem. Assim, se write_bytes falhar,
-    // o inode na imagem ainda contém a árvore inline original intacta.
-    uint32_t new_iblock[15] = {};
-    ext4_extent_header* idx_hdr = reinterpret_cast<ext4_extent_header*>(new_iblock);
-    idx_hdr->eh_magic = EXT4_EXT_MAGIC;
-    idx_hdr->eh_entries = 1;
-    // Número máximo de índices inline:
-    // 60 bytes - 12 (header) = 48 bytes / 12 bytes por índice = 4 índices
-    idx_hdr->eh_max = 4;
-    idx_hdr->eh_depth = 1;
-    idx_hdr->eh_generation = 0;
-
-    ext4_extent_idx* idx = reinterpret_cast<ext4_extent_idx*>(idx_hdr + 1);
-    idx[0].ei_block = 0; // bloco lógico inicial coberto por este índice
-    idx[0].ei_leaf_lo = static_cast<uint32_t>(leaf_block & 0xFFFFFFFF);
-    idx[0].ei_leaf_hi = static_cast<uint16_t>((leaf_block >> 32) & 0xFFFF);
-    idx[0].ei_unused = 0;
-
-    // 1ª escrita: bloco folha externo.
-    // Se falhar, o inode na imagem ainda está com a árvore inline original;
-    // o único efeito colateral é o bloco alocado ficar marcado como usado
-    // sem conteúdo válido (bloco vazado), o que é inevitável sem journal.
-    uint64_t leaf_block_offset = get_block_offset(leaf_block);
-    if (!write_bytes(image, leaf_block_offset, leaf_buf.data(), block_size)) {
-      std::cerr << "write_extent_to_inode: erro ao gravar bloco folha externo\n";
-      return false;
-    }
-
-    // 2ª escrita: inode promovido para depth == 1.
-    // Só chegamos aqui se o bloco folha foi gravado com sucesso.
-    for (int i = 0; i < 15; i++) {
-      inode_in.i_block[i] = new_iblock[i];
-    }
-
-    return update_inode(inode_num, inode_in);
-  }
-
-  // árvore com depth == 1 (nó raiz em i_block com índices)
-  if (hdr->eh_depth == 1) {
-    ext4_extent_idx* indices = reinterpret_cast<ext4_extent_idx*>(hdr + 1);
-    
-    // Encontra qual índice gerencia a faixa do logical_block (ou o último índice ativo)
-    uint16_t idx_pos = 0;
-    for (uint16_t i = 1; i < hdr->eh_entries; i++) {
-      if (logical_block >= indices[i].ei_block) {
-        idx_pos = i;
-      } else {
-        break;
+      if (extents[i].ee_block == logical_block) {
+        extents[i].ee_len = len;
+        extents[i].ee_start_lo = static_cast<uint32_t>(phys_block & 0xFFFFFFFF);
+        extents[i].ee_start_hi = static_cast<uint16_t>((phys_block >> 32) & 0xFFFF);
+        return update_inode(inode_num, inode_in); // Atualiza memória e disco
       }
     }
 
-    // Carrega o bloco folha apontado por esse índice
-    uint64_t leaf_block = (static_cast<uint64_t>(indices[idx_pos].ei_leaf_hi) << 32) | indices[idx_pos].ei_leaf_lo;
-    uint64_t leaf_block_offset = get_block_offset(leaf_block);
-    
-    std::vector<char> leaf_buf(block_size, 0);
-    if (!read_bytes(image, leaf_block_offset, leaf_buf.data(), block_size)) {
-      std::cerr << "write_extent_to_inode: erro ao ler bloco folha externo\n";
+    // 3. Validação: Se NÃO foi substituição e já atingiu o limite de 4, retorna false
+    if (hdr->eh_entries >= MAX_INLINE_EXTENTS) {
+      std::cerr << "write_extent_to_inode: limite de extents inline atingido (máx 4). Split não suportado.\n";
       return false;
     }
 
-    ext4_extent_header* leaf_hdr = reinterpret_cast<ext4_extent_header*>(leaf_buf.data());
-    ext4_extent* leaf_exts = reinterpret_cast<ext4_extent*>(leaf_hdr + 1);
-
-    // Tenta substituir ou fazer coalescing no bloco folha atual
-    bool replaced = false;
-    for (uint16_t i = 0; i < leaf_hdr->eh_entries; i++) {
-      if (leaf_exts[i].ee_block == logical_block) {
-        leaf_exts[i].ee_len = len;
-        leaf_exts[i].ee_start_lo = static_cast<uint32_t>(phys_block & 0xFFFFFFFF);
-        leaf_exts[i].ee_start_hi = static_cast<uint16_t>((phys_block >> 32) & 0xFFFF);
-        replaced = true;
-        break;
-      }
-    }
-
-    if (replaced) {
-      return write_bytes(image, leaf_block_offset, leaf_buf.data(), block_size);
-    }
-
-    // Caso A: O bloco folha atual ainda tem espaço livre para inserção
-    if (leaf_hdr->eh_entries < leaf_hdr->eh_max) {
-      // Encontra a posição correta para manter ordenado por ee_block
-      uint16_t insert_pos = leaf_hdr->eh_entries;
-      while (insert_pos > 0 && leaf_exts[insert_pos - 1].ee_block > logical_block) {
-        leaf_exts[insert_pos] = leaf_exts[insert_pos - 1];
-        insert_pos--;
-      }
-
-      leaf_exts[insert_pos].ee_block = logical_block;
-      leaf_exts[insert_pos].ee_len = len;
-      leaf_exts[insert_pos].ee_start_lo = static_cast<uint32_t>(phys_block & 0xFFFFFFFF);
-      leaf_exts[insert_pos].ee_start_hi = static_cast<uint16_t>((phys_block >> 32) & 0xFFFF);
-      leaf_hdr->eh_entries++;
-
-      // Se inseriu na posição 0, precisamos atualizar o ei_block do índice correspondente na raiz
-      if (insert_pos == 0) {
-        indices[idx_pos].ei_block = logical_block;
-        if (!update_inode(inode_num, inode_in)) return false;
-      }
-
-      return write_bytes(image, leaf_block_offset, leaf_buf.data(), block_size);
-    }
-
-    // Caso B: O bloco folha está cheio! Precisamos alocar um NOVO bloco folha (Split de folha)
-    if (hdr->eh_entries >= hdr->eh_max) {
-      std::cerr << "write_extent_to_inode: Raiz de indices cheia (limite depth=1 atingido). "
-                << "Necessita promocao para depth == 2.\n";
-      return false; // Encaminha para o tratamento de depth > 1
-    }
-
-    uint64_t alloc_count = 0;
-    uint64_t new_leaf_block = alloc_blocks(1, alloc_count);
-    if (new_leaf_block == 0 || alloc_count == 0) {
-      std::cerr << "write_extent_to_inode: sem blocos livres para criar nova folha\n";
-      return false;
-    }
-
-    std::vector<char> new_leaf_buf(block_size, 0);
-    ext4_extent_header* new_leaf_hdr = reinterpret_cast<ext4_extent_header*>(new_leaf_buf.data());
-    new_leaf_hdr->eh_magic = EXT4_EXT_MAGIC;
-    new_leaf_hdr->eh_entries = 1;
-    new_leaf_hdr->eh_max = static_cast<uint16_t>(max_extents_in_block);
-    new_leaf_hdr->eh_depth = 0;
-
-    ext4_extent* new_leaf_exts = reinterpret_cast<ext4_extent*>(new_leaf_hdr + 1);
-    new_leaf_exts[0].ee_block = logical_block;
-    new_leaf_exts[0].ee_len = len;
-    new_leaf_exts[0].ee_start_lo = static_cast<uint32_t>(phys_block & 0xFFFFFFFF);
-    new_leaf_exts[0].ee_start_hi = static_cast<uint16_t>((phys_block >> 32) & 0xFFFF);
-
-    // Grava o novo bloco folha externo
-    uint64_t new_leaf_offset = get_block_offset(new_leaf_block);
-    if (!write_bytes(image, new_leaf_offset, new_leaf_buf.data(), block_size)) {
-      return false;
-    }
-
-    // Insere o novo índice mantendo o array de índices da raiz ordenado por ei_block
-    uint16_t insert_idx_pos = hdr->eh_entries;
-    while (insert_idx_pos > 0 && indices[insert_idx_pos - 1].ei_block > logical_block) {
-      indices[insert_idx_pos] = indices[insert_idx_pos - 1];
-      insert_idx_pos--;
-    }
-
-    indices[insert_idx_pos].ei_block = logical_block;
-    indices[insert_idx_pos].ei_leaf_lo = static_cast<uint32_t>(new_leaf_block & 0xFFFFFFFF);
-    indices[insert_idx_pos].ei_leaf_hi = static_cast<uint16_t>((new_leaf_block >> 32) & 0xFFFF);
-    indices[insert_idx_pos].ei_unused = 0;
+    // 4. Inserção de um NOVO extent inline (garantido que tem espaço)
+    ext4_extent& slot = extents[hdr->eh_entries];
+    slot.ee_block = logical_block;
+    slot.ee_len = len;
+    slot.ee_start_lo = static_cast<uint32_t>(phys_block & 0xFFFFFFFF);
+    slot.ee_start_hi = static_cast<uint16_t>((phys_block >> 32) & 0xFFFF);
     hdr->eh_entries++;
 
     return update_inode(inode_num, inode_in);
   }
 
-  // árvore com depth > 1 (múltiplos níveis de índices internos intermediários)
-  if (hdr->eh_depth > 1) {
-    // Para descer na árvore, começamos do header do inode_in
-    ext4_extent_header* current_hdr = hdr;
-    uint64_t current_block = 0; // 0 indica que estamos no i_block do Inode
-    std::vector<char> current_block_buf; // Buffer para quando estivermos lendo blocos externos
-    
-    // Guardamos o caminho percorrido se precisarmos fazer splits e atualizar índices pais
-    // Armazena: {número_do_bloco_físico, posição_do_índice_usado}
-    // (Para o inode, o bloco físico pode ser representado por 0)
-    std::vector<std::pair<uint64_t, uint16_t>> path;
-
-    // Desce pela árvore de índices até alcançar o nível imediatamente acima das folhas (depth == 1)
-    while (current_hdr->eh_depth > 1) {
-      ext4_extent_idx* indices = reinterpret_cast<ext4_extent_idx*>(current_hdr + 1);
-      
-      if (current_hdr->eh_entries == 0) {
-        std::cerr << "write_extent_to_inode: Erro catastrófico, nó de índice vazio em depth " 
-                  << current_hdr->eh_depth << "\n";
-        return false;
-      }
-
-      // Procura o índice correto baseado no logical_block
-      uint16_t idx_pos = 0;
-      for (uint16_t i = 1; i < current_hdr->eh_entries; i++) {
-        if (logical_block >= indices[i].ei_block) {
-          idx_pos = i;
-        } else {
-          break;
-        }
-      }
-
-      // Salva o caminho percorrido para o caso de splits de nós internos
-      path.push_back({current_block, idx_pos});
-
-      // Pega o ponteiro para o próximo bloco de índice (filho)
-      uint64_t next_block = (static_cast<uint64_t>(indices[idx_pos].ei_leaf_hi) << 32) | indices[idx_pos].ei_leaf_lo;
-      uint64_t next_offset = get_block_offset(next_block);
-
-      // Carrega o bloco de índice filho para a memória
-      current_block_buf.assign(block_size, 0);
-      if (!read_bytes(image, next_offset, current_block_buf.data(), block_size)) {
-        std::cerr << "write_extent_to_inode: erro ao ler bloco de índice intermediário\n";
-        return false;
-      }
-
-      current_block = next_block;
-      current_hdr = reinterpret_cast<ext4_extent_header*>(current_block_buf.data());
-    }
-
-    // Ao sair do loop, `current_hdr` está em um nó de índice com eh_depth == 1.
-    // Isso significa que os índices dele apontam diretamente para blocos FOLHA!
-    ext4_extent_idx* leaf_indices = reinterpret_cast<ext4_extent_idx*>(current_hdr + 1);
-    
-    uint16_t leaf_idx_pos = 0;
-    for (uint16_t i = 1; i < current_hdr->eh_entries; i++) {
-      if (logical_block >= leaf_indices[i].ei_block) {
-        leaf_idx_pos = i;
-      } else {
-        break;
-      }
-    }
-
-    uint64_t leaf_block = (static_cast<uint64_t>(leaf_indices[leaf_idx_pos].ei_leaf_hi) << 32) | leaf_indices[leaf_idx_pos].ei_leaf_lo;
-    uint64_t leaf_offset = get_block_offset(leaf_block);
-
-    std::vector<char> leaf_buf(block_size, 0);
-    if (!read_bytes(image, leaf_offset, leaf_buf.data(), block_size)) {
-      std::cerr << "write_extent_to_inode: erro ao ler bloco folha em depth > 1\n";
-      return false;
-    }
-
-    ext4_extent_header* leaf_hdr = reinterpret_cast<ext4_extent_header*>(leaf_buf.data());
-    ext4_extent* leaf_exts = reinterpret_cast<ext4_extent*>(leaf_hdr + 1);
-
-    // 1. Tenta Substituição/Coalescing na folha localizada
-    bool replaced = false;
-    for (uint16_t i = 0; i < leaf_hdr->eh_entries; i++) {
-      if (leaf_exts[i].ee_block == logical_block) {
-        leaf_exts[i].ee_len = len;
-        leaf_exts[i].ee_start_lo = static_cast<uint32_t>(phys_block & 0xFFFFFFFF);
-        leaf_exts[i].ee_start_hi = static_cast<uint16_t>((phys_block >> 32) & 0xFFFF);
-        replaced = true;
-        break;
-      }
-    }
-
-    if (replaced) {
-      return write_bytes(image, leaf_offset, leaf_buf.data(), block_size);
-    }
-
-    // 2. Se a folha tem espaço, insere mantendo ordenado
-    if (leaf_hdr->eh_entries < leaf_hdr->eh_max) {
-      uint16_t insert_pos = leaf_hdr->eh_entries;
-      while (insert_pos > 0 && leaf_exts[insert_pos - 1].ee_block > logical_block) {
-        leaf_exts[insert_pos] = leaf_exts[insert_pos - 1];
-        insert_pos--;
-      }
-
-      leaf_exts[insert_pos].ee_block = logical_block;
-      leaf_exts[insert_pos].ee_len = len;
-      leaf_exts[insert_pos].ee_start_lo = static_cast<uint32_t>(phys_block & 0xFFFFFFFF);
-      leaf_exts[insert_pos].ee_start_hi = static_cast<uint16_t>((phys_block >> 32) & 0xFFFF);
-      leaf_hdr->eh_entries++;
-
-      // Grava a folha atualizada
-      if (!write_bytes(image, leaf_offset, leaf_buf.data(), block_size)) return false;
-
-      // Se mudou o bloco inicial da folha (posição 0), atualiza o índice correspondente
-      if (insert_pos == 0) {
-        leaf_indices[leaf_idx_pos].ei_block = logical_block;
-        // Se o bloco índice modificado for externo, grava em disco, senão atualiza o Inode
-        if (current_block != 0) {
-          return write_bytes(image, get_block_offset(current_block), current_block_buf.data(), block_size);
-        } else {
-          return update_inode(inode_num, inode_in);
-        }
-      }
-      return true;
-    }
-  }
-  // Se a folha está cheia e estamos em depth > 1, precisaríamos dividir a folha externa 
-  // e propagar o split para cima na árvore através do vetor `path`.
-  std::cerr << "write_extent_to_inode: Bloco folha cheio em arvore depth > 1. "
-            << "Split recursivo para arvores multiniveis nao suportado nesta versao simplificada.\n";
+  // Árvores com depth >= 1 não são suportadas nesta simplificação
+  std::cerr << "write_extent_to_inode: Árvores com depth > 0 não são suportadas.\n";
   return false;
 }
 
