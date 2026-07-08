@@ -201,6 +201,26 @@ public:
                                uint16_t len);
 
     /**
+     * Escreve um buffer de dados diretamente em um bloco físico do sistema de arquivos.
+     * @param phys_block Número do bloco físico absoluto
+     * @param data Vetor de bytes a ser gravado
+     * @returns true se a escrita foi bem-sucedida; false caso contrário
+     */
+    bool write_block_bytes(uint64_t phys_block, const std::vector<char>& buffer);
+
+    /**
+     * Escreve dados em um bloco lógico de um arquivo, gereneciando alocação física,
+     * atualização da árvore de extents e ajuste do tamanho do arquivo de forma consistente.
+     * * @param inode_num Número do inode do arquivo destino
+     * @param inode_in Referência para a struct inode em memória
+     * @param logical_block O bloco lógico onde o dado deve começar (0 para o início)
+     * @param buffer Vetor contendo os bytes brutos a serem escritos
+     * @return true se toda a operação foi gravada e persistida com sucesso; false caso contrário
+     */
+    bool write_to_file(uint32_t inode_num, inode& inode_in, 
+                       uint32_t logical_block, const std::vector<char>& buffer);
+
+    /**
      * Imprime todos os campos do superbloco na saída padrão.
      */
     void print_superblock() const;
