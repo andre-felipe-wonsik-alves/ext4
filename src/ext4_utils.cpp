@@ -134,7 +134,8 @@ std::vector<char> Ext4FS::read_inode_content(const inode &inode_in) {
     if (rem_bytes == 0)
       break;
 
-    // se o próximo extent começa depois de onde parou, há um buraco e o preenche com zeros antes de ler o extent
+    // se o próximo extent começa depois de onde parou, há um buraco e o
+    // preenche com zeros antes de ler o extent
     if (extent.ee_block > next_logical_block) {
       uint64_t hole_blocks = extent.ee_block - next_logical_block;
       uint64_t hole_bytes = hole_blocks * block_size;
@@ -412,19 +413,23 @@ bool Ext4FS::write_inode(uint32_t inode_num, const inode &inode_in) {
   return update_inode(inode_num, inode_in);
 }
 
-bool Ext4FS::update_inode_size(uint32_t inode_num, inode& inode_in, uint64_t new_size) {
+bool Ext4FS::update_inode_size(uint32_t inode_num, inode &inode_in,
+                               uint64_t new_size) {
   if (inode_num == 0 || inode_num > sb.s_inodes_count) {
-    std::cerr << "update_inode_size: número de inode inválido: " << inode_num << "\n";
+    std::cerr << "update_inode_size: número de inode inválido: " << inode_num
+              << "\n";
     return false;
   }
 
   inode_in.i_size_lo = static_cast<uint32_t>(new_size & 0xFFFFFFFFULL);
-  inode_in.i_size_high = static_cast<uint32_t>((new_size >> 32) & 0xFFFFFFFFULL);
+  inode_in.i_size_high =
+      static_cast<uint32_t>((new_size >> 32) & 0xFFFFFFFFULL);
 
   return update_inode(inode_num, inode_in);
 }
 
-// alloc_inode: aloca o primeiro inode livre no SA, atualizando bitmaps e contadores
+// alloc_inode: aloca o primeiro inode livre no SA, atualizando bitmaps e
+// contadores
 uint32_t Ext4FS::alloc_inode() {
   /**
    * Percorre cada grupo consultando o GDT antes de ler o bitmap,
@@ -627,9 +632,8 @@ uint64_t Ext4FS::alloc_blocks(uint64_t count, uint64_t &allocated_count) {
   return 0;
 }
 
-bool Ext4FS::write_extent_to_inode(uint32_t inode_num, inode& inode_in,
-                                   uint32_t logical_block,
-                                   uint64_t phys_block,
+bool Ext4FS::write_extent_to_inode(uint32_t inode_num, inode &inode_in,
+                                   uint32_t logical_block, uint64_t phys_block,
                                    uint16_t len) {
 
   // Validações básicas
@@ -641,14 +645,25 @@ bool Ext4FS::write_extent_to_inode(uint32_t inode_num, inode& inode_in,
     std::cerr << "write_extent_to_inode: len == 0\n";
     return false;
   }
+  if (len > 32768) {
+    std::cerr << "write_extent_to_inode: len excede o máximo suportado por "
+                 "extents inline\n";
+    return false;
+  }
+  if (phys_block < sb.s_first_data_block || phys_block >= blocks_count) {
+    std::cerr
+        << "write_extent_to_inode: bloco físico fora do intervalo válido\n";
+    return false;
+  }
 
   // Magic number da extent tree
   static constexpr uint16_t EXT4_EXT_MAGIC = 0xF30A;
   static constexpr uint16_t MAX_INLINE_EXTENTS = 4;
 
-  ext4_extent_header* hdr = reinterpret_cast<ext4_extent_header*>(inode_in.i_block);
+  ext4_extent_header *hdr =
+      reinterpret_cast<ext4_extent_header *>(inode_in.i_block);
 
-  // Inicializa a extent tree se o inode ainda não a tem 
+  // Inicializa a extent tree se o inode ainda não a tem
   if (hdr->eh_magic != EXT4_EXT_MAGIC) {
     hdr->eh_magic = EXT4_EXT_MAGIC;
     hdr->eh_entries = 0;
@@ -659,11 +674,11 @@ bool Ext4FS::write_extent_to_inode(uint32_t inode_num, inode& inode_in,
 
   // árvore inline de folhas (depth == 0)
   if (hdr->eh_depth == 0) {
-    ext4_extent* extents = reinterpret_cast<ext4_extent*>(hdr + 1);
+    ext4_extent *extents = reinterpret_cast<ext4_extent *>(hdr + 1);
 
     // 1. Coalescing (Tenta agrupar com o último bloco se forem contíguos)
     if (hdr->eh_entries > 0) {
-      ext4_extent& last = extents[hdr->eh_entries - 1];
+      ext4_extent &last = extents[hdr->eh_entries - 1];
       uint64_t last_phys = get_extent_phys_block(last);
       uint16_t last_len = last.ee_len;
 
@@ -680,24 +695,27 @@ bool Ext4FS::write_extent_to_inode(uint32_t inode_num, inode& inode_in,
     }
 
     // Procura se o bloco lógico já está mapeado (Caso de Substituição)
-    // Isso deve vir ANTES do teste de "bloco cheio", pois substituir não aumenta o número de entries!
+    // Isso deve vir ANTES do teste de "bloco cheio", pois substituir não
+    // aumenta o número de entries!
     for (uint16_t i = 0; i < hdr->eh_entries; i++) {
       if (extents[i].ee_block == logical_block) {
         extents[i].ee_len = len;
         extents[i].ee_start_lo = static_cast<uint32_t>(phys_block & 0xFFFFFFFF);
-        extents[i].ee_start_hi = static_cast<uint16_t>((phys_block >> 32) & 0xFFFF);
+        extents[i].ee_start_hi =
+            static_cast<uint16_t>((phys_block >> 32) & 0xFFFF);
         return update_inode(inode_num, inode_in); // Atualiza memória e disco
       }
     }
 
     // Se não foi substituição e já atingiu o limite de 4, retorna false
     if (hdr->eh_entries >= MAX_INLINE_EXTENTS) {
-      std::cerr << "write_extent_to_inode: limite de extents inline atingido (máx 4). Split não suportado.\n";
+      std::cerr << "write_extent_to_inode: limite de extents inline atingido "
+                   "(máx 4). Split não suportado.\n";
       return false;
     }
 
     // Insere um novo extent
-    ext4_extent& slot = extents[hdr->eh_entries];
+    ext4_extent &slot = extents[hdr->eh_entries];
     slot.ee_block = logical_block;
     slot.ee_len = len;
     slot.ee_start_lo = static_cast<uint32_t>(phys_block & 0xFFFFFFFF);
@@ -708,7 +726,8 @@ bool Ext4FS::write_extent_to_inode(uint32_t inode_num, inode& inode_in,
   }
 
   // Árvores com depth >= 1 não são suportadas
-  std::cerr << "write_extent_to_inode: Árvores com depth > 0 não são suportadas.\n";
+  std::cerr
+      << "write_extent_to_inode: Árvores com depth > 0 não são suportadas.\n";
   return false;
 }
 
@@ -724,13 +743,13 @@ bool Ext4FS::find_mapped_block(const inode &inode_in, uint32_t logical_block,
     return false;
   }
 
-  const ext4_extent *extents =
-      reinterpret_cast<const ext4_extent *>(hdr + 1);
+  const ext4_extent *extents = reinterpret_cast<const ext4_extent *>(hdr + 1);
 
   for (uint16_t i = 0; i < hdr->eh_entries; i++) {
     const ext4_extent &ext = extents[i];
-    uint16_t real_len =
-        (ext.ee_len <= 32768) ? ext.ee_len : static_cast<uint16_t>(ext.ee_len - 32768);
+    uint16_t real_len = (ext.ee_len <= 32768)
+                            ? ext.ee_len
+                            : static_cast<uint16_t>(ext.ee_len - 32768);
 
     if (logical_block >= ext.ee_block &&
         logical_block < ext.ee_block + real_len) {
@@ -1110,7 +1129,8 @@ void Ext4FS::print_inode(const inode &inode_in, uint32_t /*inode_num*/) const {
 }
 
 // write_block_bytes: escreve bytes em um bloco físico da imagem ext4
-bool Ext4FS::write_block_bytes(uint64_t phys_block, const std::vector<char>& buffer) {
+bool Ext4FS::write_block_bytes(uint64_t phys_block,
+                               const std::vector<char> &buffer) {
   if (!image.is_open()) {
     return false;
   }
@@ -1118,367 +1138,738 @@ bool Ext4FS::write_block_bytes(uint64_t phys_block, const std::vector<char>& buf
   uint64_t offset = get_block_offset(phys_block);
 
   // Escreve até o limite do tamanho do bloco ou o tamanho do buffer enviado
-  uint64_t bytes_to_write = std::min(block_size, static_cast<uint64_t>(buffer.size()));
+  uint64_t bytes_to_write =
+      std::min(block_size, static_cast<uint64_t>(buffer.size()));
 
-  // Reutiliza o write_bytes de io_utils.h. 
+  // Reutiliza o write_bytes de io_utils.h.
   // Como o buffer é const, usamos const_cast para casar com o ponteiro void*
-  return write_bytes(image, offset, const_cast<char*>(buffer.data()), bytes_to_write);
+  return write_bytes(image, offset, const_cast<char *>(buffer.data()),
+                     bytes_to_write);
 }
 
-bool Ext4FS::write_to_file(uint32_t inode_num, inode& inode_in, 
-                           uint32_t logical_block, const std::vector<char>& buffer) {
-    // 1. Validações iniciais básicas
-    if (inode_num == 0 || !image.is_open() || buffer.empty()) {
-        std::cerr << "write_to_file: parâmetros inválidos ou imagem fechada\n";
+bool Ext4FS::write_to_file(uint32_t inode_num, inode &inode_in,
+                           uint32_t logical_block,
+                           const std::vector<char> &buffer) {
+  // Escreve bytes em um arquivo ext4 a partir de um bloco lógico.
+  // Cada chunk é gravado em um bloco físico, e se ainda não existir um extent
+  // para esse bloco lógico, um novo bloco é alocado e mapeado na extent tree.
+  if (inode_num == 0 || !image.is_open() || buffer.empty()) {
+    std::cerr << "write_to_file: parâmetros inválidos ou imagem fechada\n";
+    return false;
+  }
+
+  static constexpr uint32_t EXT4_EXTENTS_FL = 0x80000;
+  inode_in.i_flags |= EXT4_EXTENTS_FL;
+
+  uint64_t total_bytes = buffer.size();
+  uint64_t bytes_written = 0;
+  uint32_t curr_logical_block = logical_block;
+
+  while (bytes_written < total_bytes) {
+    // Divide o buffer em pedaços do tamanho de um bloco do filesystem.
+    uint64_t chunk_size =
+        std::min<uint64_t>(block_size, total_bytes - bytes_written);
+    std::vector<char> chunk(buffer.begin() + bytes_written,
+                            buffer.begin() + bytes_written + chunk_size);
+
+    // Procura se o bloco lógico já possui um mapeamento físico.
+    // Se existir, sobrescreve o bloco já associado; caso contrário, aloca um
+    // novo.
+    uint64_t phys_block = 0;
+    uint16_t existing_len = 0;
+    bool already_mapped = find_mapped_block(inode_in, curr_logical_block,
+                                            phys_block, existing_len);
+
+    if (!already_mapped) {
+      uint64_t alloc_count = 0;
+      phys_block = alloc_blocks(1, alloc_count);
+      if (phys_block == 0 || alloc_count == 0) {
+        std::cerr << "write_to_file: falha ao alocar bloco físico (sem espaço "
+                     "livre)\n";
         return false;
+      }
     }
 
-    uint64_t total_bytes = buffer.size();
-    uint64_t bytes_written = 0;
-    uint32_t curr_logical_block = logical_block;
-
-    while (bytes_written < total_bytes) {
-        uint64_t chunk_size = std::min<uint64_t>(block_size, total_bytes - bytes_written);
-        std::vector<char> chunk(buffer.begin() + bytes_written,
-                                buffer.begin() + bytes_written + chunk_size);
-
-        // verifica se esse bloco lógico já está mapeado, se estiver eaproveita o bloco físico ao invés de alocar um novo
-        uint64_t phys_block = 0;
-        uint16_t existing_len = 0;
-        bool already_mapped =
-            find_mapped_block(inode_in, curr_logical_block, phys_block, existing_len);
-
-        if (!already_mapped) {
-            uint64_t alloc_count = 0;
-            phys_block = alloc_blocks(1, alloc_count);
-            if (phys_block == 0 || alloc_count == 0) {
-                std::cerr << "write_to_file: falha ao alocar bloco físico (sem espaço livre)\n";
-                return false;
-            }
-        }
-
-        if (!write_block_bytes(phys_block, chunk)) {
-            std::cerr << "write_to_file: erro físico ao escrever dados no bloco " << phys_block << "\n";
-            return false;
-        }
-
-        if (!already_mapped) {
-            if (!write_extent_to_inode(inode_num, inode_in, curr_logical_block, phys_block, 1)) {
-                std::cerr << "write_to_file: falha ao atualizar a árvore de extents do inode " << inode_num << "\n";
-                return false;
-            }
-        }
-
-        bytes_written += chunk_size;
-        curr_logical_block++;
+    // Monta o conteúdo do bloco físico a partir do chunk e, se necessário,
+    // preserva o conteúdo já existente em caso de sobrescrita parcial.
+    std::vector<char> block_data(block_size, 0);
+    if (already_mapped) {
+      if (!read_bytes(image, get_block_offset(phys_block), block_data.data(),
+                      block_size)) {
+        std::cerr << "write_to_file: erro ao ler bloco físico existente "
+                  << phys_block << "\n";
+        return false;
+      }
     }
 
-    uint64_t current_size = get_file_size(inode_in);
+    std::copy(chunk.begin(), chunk.end(), block_data.begin());
 
-    uint64_t new_potential_size = (static_cast<uint64_t>(logical_block) * block_size) + total_bytes;
-
-    if (current_size < new_potential_size) {
-        if (!update_inode_size(inode_num, inode_in, new_potential_size)) {
-            std::cerr << "write_to_file: falha ao atualizar tamanho do inode no disco\n";
-            return false;
-        }
+    if (!write_block_bytes(phys_block, block_data)) {
+      std::cerr << "write_to_file: erro físico ao escrever dados no bloco "
+                << phys_block << "\n";
+      return false;
     }
 
-    return true;
+    if (!already_mapped) {
+      // Um bloco novo implica mais 512-byte sectors no contador i_blocks.
+      inode_in.i_blocks_lo += static_cast<uint32_t>(block_size / 512);
+      if (!write_extent_to_inode(inode_num, inode_in, curr_logical_block,
+                                 phys_block, 1)) {
+        std::cerr
+            << "write_to_file: falha ao atualizar a árvore de extents do inode "
+            << inode_num << "\n";
+        return false;
+      }
+    }
+
+    bytes_written += chunk_size;
+    curr_logical_block++;
+  }
+
+  uint64_t current_size = get_file_size(inode_in);
+
+  // O tamanho lógico final do arquivo é calculado a partir do bloco lógico
+  // inicial e do total de bytes gravados neste trecho.
+  uint64_t new_potential_size =
+      (static_cast<uint64_t>(logical_block) * block_size) + total_bytes;
+
+  if (current_size < new_potential_size) {
+    if (!update_inode_size(inode_num, inode_in, new_potential_size)) {
+      std::cerr
+          << "write_to_file: falha ao atualizar tamanho do inode no disco\n";
+      return false;
+    }
+  }
+
+  // Atualiza i_blocks com a quantidade de setores de 512 bytes ocupados.
+  uint64_t required_blocks = (new_potential_size + 511) / 512;
+  inode_in.i_blocks_lo = static_cast<uint32_t>(required_blocks & 0xFFFFFFFFULL);
+  if (!update_inode(inode_num, inode_in)) {
+    std::cerr << "write_to_file: falha ao atualizar i_blocks do inode "
+              << inode_num << "\n";
+    return false;
+  }
+
+  return true;
 }
 
 bool Ext4FS::write_dir_entry(uint32_t parent_inode_num, uint32_t new_inode_num,
                              const std::string &name, uint8_t file_type) {
-    inode parent_inode;
-    if (!read_inode(parent_inode_num, parent_inode)) {
-        std::cerr << "write_dir_entry: erro ao ler inode pai\n";
+  inode parent_inode;
+  if (!read_inode(parent_inode_num, parent_inode)) {
+    std::cerr << "write_dir_entry: erro ao ler inode pai\n";
+    return false;
+  }
+
+  // Tamanho mínimo necessário para a entrada de diretório, alinhado a 4 bytes.
+  uint32_t req_len = dir_ent_min_len(name.length());
+
+  ext4_extent_header *hdr =
+      reinterpret_cast<ext4_extent_header *>(parent_inode.i_block);
+
+  bool space_found = false;
+  uint64_t target_phys_block = 0;
+  std::vector<char> block_buf(block_size, 0);
+
+  // Tenta reaproveitar o último bloco de dados do diretório, caso exista
+  // espaço.
+  if (hdr->eh_magic == 0xF30A && hdr->eh_depth == 0 && hdr->eh_entries > 0) {
+    ext4_extent *exts = reinterpret_cast<ext4_extent *>(hdr + 1);
+    ext4_extent &last_ext = exts[hdr->eh_entries - 1];
+
+    uint64_t phys_start = (static_cast<uint64_t>(last_ext.ee_start_hi) << 32) |
+                          last_ext.ee_start_lo;
+    target_phys_block = phys_start + last_ext.ee_len - 1;
+
+    if (read_bytes(image, get_block_offset(target_phys_block), block_buf.data(),
+                   block_size)) {
+      uint32_t offset = 0;
+      ext4_dir_entry_2 *entry = nullptr;
+
+      // encontra a última entrada no diretório pai
+      while (offset < block_size) {
+        entry = reinterpret_cast<ext4_dir_entry_2 *>(block_buf.data() + offset);
+        if (offset + entry->rec_len == block_size || entry->rec_len == 0) {
+          break;
+        }
+        offset += entry->rec_len;
+      }
+
+      if (entry != nullptr && entry->rec_len > 0) {
+        uint32_t min_len = 0;
+        if (entry->inode != 0) {
+          min_len = (8 + entry->name_len + 3) & ~3;
+        }
+
+        uint32_t free_space = entry->rec_len - min_len;
+
+        // se houver espaço
+        if (free_space >= req_len) {
+          if (min_len > 0) {
+            entry->rec_len = min_len;
+
+            ext4_dir_entry_2 *new_entry = reinterpret_cast<ext4_dir_entry_2 *>(
+                block_buf.data() + offset + min_len);
+            new_entry->inode = new_inode_num;
+            new_entry->rec_len =
+                free_space; // ocupa o resto do bloco; deve ser revertido ao
+                            // escrever outro dir_entry (ou remover esse)
+            new_entry->name_len = static_cast<uint8_t>(name.length());
+            new_entry->file_type = file_type;
+            std::memcpy(new_entry->name, name.c_str(), name.length());
+          } else {
+            // reaproveita inode deletado previametne
+            entry->inode = new_inode_num;
+            entry->name_len = static_cast<uint8_t>(name.length());
+            entry->file_type = file_type;
+            std::memcpy(entry->name, name.c_str(), name.length());
+          }
+
+          if (!write_block_bytes(target_phys_block, block_buf))
+            return false;
+          space_found = true;
+        }
+      }
+    }
+  }
+
+  // Se não houver espaço suficiente, aloca um novo bloco para o diretório.
+  if (!space_found) {
+    uint64_t alloc_count = 0;
+    uint64_t new_phys_block = alloc_blocks(1, alloc_count);
+    if (new_phys_block == 0)
+      return false;
+
+    std::fill(block_buf.begin(), block_buf.end(), 0);
+
+    ext4_dir_entry_2 *new_entry =
+        reinterpret_cast<ext4_dir_entry_2 *>(block_buf.data());
+    new_entry->inode = new_inode_num;
+    new_entry->rec_len = block_size;
+    new_entry->name_len = static_cast<uint8_t>(name.length());
+    new_entry->file_type = file_type;
+    std::memcpy(new_entry->name, name.c_str(), name.length());
+
+    if (!write_block_bytes(new_phys_block, block_buf))
+      return false;
+
+    // Mapeia o novo bloco lógico no inode do diretório pai como um novo extent.
+    uint32_t logical_block =
+        (get_file_size(parent_inode) + block_size - 1) / block_size;
+    if (!write_extent_to_inode(parent_inode_num, parent_inode, logical_block,
+                               new_phys_block, 1)) {
+      return false;
+    }
+
+    uint64_t new_size = get_file_size(parent_inode) + block_size;
+    parent_inode.i_size_lo = static_cast<uint32_t>(new_size & 0xFFFFFFFF);
+    parent_inode.i_size_high =
+        static_cast<uint32_t>((new_size >> 32) & 0xFFFFFFFF);
+    parent_inode.i_blocks_lo += (block_size / 512);
+  }
+
+  parent_inode.i_mtime = time(NULL);
+  parent_inode.i_ctime = time(NULL);
+
+  static constexpr uint8_t EXT4_FT_DIR = 2;
+  if (file_type == EXT4_FT_DIR) {
+    parent_inode.i_links_count++;
+
+    uint32_t parent_bg = get_inode_block_group(parent_inode_num);
+    set_gd_used_dirs_count(parent_bg, get_gd_used_dirs_count(parent_bg) + 1);
+    if (!update_gdt_entry(parent_bg)) {
+      return false;
+    }
+  }
+
+  return update_inode(parent_inode_num, parent_inode);
+}
+
+uint32_t Ext4FS::create_file_entry(uint32_t parent_inode_num,
+                                   const std::string &name, uint8_t file_type) {
+  // Cria um novo inode e o registra no diretório pai como um arquivo regular
+  // ou um diretório. Para diretórios, também inicializa o conteúdo mínimo com
+  // as entradas "." e "..".
+  if (name.empty() || name.find('/') != std::string::npos) {
+    std::cerr << "create_file_entry: nome inválido\n";
+    return 0;
+  }
+
+  inode parent_inode;
+  if (!read_inode(parent_inode_num, parent_inode) ||
+      !inode_is_dir(parent_inode)) {
+    std::cerr << "create_file_entry: diretório pai inválido\n";
+    return 0;
+  }
+
+  uint32_t inode_num =
+      alloc_inode(); // Aloca um novo inode para o arquivo ou diretório.
+  if (inode_num == 0) {
+    std::cerr << "create_file_entry: falha ao alocar inode\n";
+    return 0;
+  }
+
+  static constexpr uint32_t EXT4_EXTENTS_FL =
+      0x80000; // Indica que o inode usa extents para mapear blocos de dados.
+
+  // Inicializa o novo inode com os valores padrão para arquivos regulares ou
+  // diretórios.
+  inode new_inode{};
+  new_inode.i_mode = (file_type == 2) ? 0x41ED : 0x81A4;
+  new_inode.i_uid = 0;
+  new_inode.i_gid = 0;
+  new_inode.i_links_count = (file_type == 2) ? 2 : 1;
+  new_inode.i_flags |= EXT4_EXTENTS_FL;
+  new_inode.i_atime = static_cast<uint32_t>(time(nullptr));
+  new_inode.i_ctime = new_inode.i_atime;
+  new_inode.i_mtime = new_inode.i_atime;
+
+  if (file_type == 2) {
+    // Diretórios precisam de um bloco inicial para armazenar suas entradas.
+    uint64_t alloc_count = 0;
+    uint64_t phys_block = alloc_blocks(1, alloc_count);
+    if (phys_block == 0 || alloc_count == 0) {
+      free_inode(inode_num, true);
+      std::cerr << "create_file_entry: falha ao alocar bloco para diretório\n";
+      return 0;
+    }
+
+    // Inicializa o bloco do diretório com as entradas "." e "..".
+    std::vector<char> dir_block(block_size, 0);
+    ext4_dir_entry_2 *dot = reinterpret_cast<ext4_dir_entry_2 *>(
+        dir_block
+            .data()); // Ponteiro para a primeira entrada do diretório (".").
+    dot->inode = inode_num;
+    dot->rec_len = dir_ent_min_len(1);
+    dot->name_len = 1;
+    dot->file_type = 2;
+    dot->name[0] = '.';
+
+    // Cria a entrada ".." logo após a entrada "." no bloco do diretório.
+    ext4_dir_entry_2 *dotdot =
+        reinterpret_cast<ext4_dir_entry_2 *>(dir_block.data() + dot->rec_len);
+    dotdot->inode = parent_inode_num;
+    dotdot->rec_len = static_cast<uint16_t>(block_size - dot->rec_len);
+    dotdot->name_len = 2;
+    dotdot->file_type = 2;
+    dotdot->name[0] = '.';
+    dotdot->name[1] = '.';
+
+    if (!write_block_bytes(phys_block, dir_block)) {
+      free_inode(inode_num, true);
+      free_blocks(phys_block, 1);
+      std::cerr << "create_file_entry: falha ao escrever bloco do diretório\n";
+      return 0;
+    }
+
+    if (!write_extent_to_inode(inode_num, new_inode, 0, phys_block, 1)) {
+      free_inode(inode_num, true);
+      free_blocks(phys_block, 1);
+      std::cerr << "create_file_entry: falha ao mapear o bloco do diretório\n";
+      return 0;
+    }
+
+    // Atualiza o tamanho do inode para refletir o tamanho do bloco alocado.
+    new_inode.i_size_lo = static_cast<uint32_t>(block_size & 0xFFFFFFFFULL);
+    new_inode.i_size_high =
+        static_cast<uint32_t>((block_size >> 32) & 0xFFFFFFFFULL);
+    new_inode.i_blocks_lo =
+        static_cast<uint32_t>((block_size / 512) & 0xFFFFFFFFULL);
+  }
+
+  // Persiste o novo inode no disco.
+  if (!update_inode(inode_num, new_inode)) {
+    if (file_type == 2) {
+      free_inode(inode_num, true);
+    } else {
+      free_inode(inode_num, false);
+    }
+    std::cerr << "create_file_entry: falha ao persistir inode\n";
+    return 0;
+  }
+
+  // Registra a nova entrada no diretório pai.
+  if (!write_dir_entry(parent_inode_num, inode_num, name, file_type)) {
+    if (file_type == 2) {
+      free_inode(inode_num, true);
+    } else {
+      free_inode(inode_num, false);
+    }
+    std::cerr
+        << "create_file_entry: falha ao registrar entrada no diretório pai\n";
+    return 0;
+  }
+
+  return inode_num;
+}
+
+bool Ext4FS::unlink_entry(uint32_t parent_inode_num,
+                          const std::string &target_name,
+                          uint32_t target_inode_num) {
+  // Remove uma entrada do diretório pai e, em seguida, libera os blocos e o
+  // inode associado ao arquivo ou diretório alvo.
+  uint32_t removed_inode_num = remove_dir_entry(parent_inode_num, target_name);
+  if (removed_inode_num == 0) {
+    if (target_inode_num != 0) {
+      removed_inode_num = target_inode_num;
+    } else {
+      return false;
+    }
+  }
+
+  // Lê o inode do arquivo ou diretório alvo para liberar seus blocos e limpar o
+  // inode.
+  inode target_inode;
+  if (!read_inode(removed_inode_num, target_inode)) {
+    std::cerr << "unlink_entry: erro ao ler inode alvo\n";
+    return false;
+  }
+
+  // Lê os extents do inode alvo para liberar os blocos físicos associados.
+  std::vector<ext4_extent> extents;
+  if (!read_leaf_extents(
+          reinterpret_cast<const ext4_extent_header *>(target_inode.i_block),
+          extents)) {
+    std::cerr << "unlink_entry: erro ao ler extents do inode alvo\n";
+    return false;
+  }
+
+  // Libera cada bloco físico mapeado pelos extents do inode alvo.
+  for (const auto &extent : extents) {
+    uint64_t phys_start = get_extent_phys_block(extent);
+    uint16_t len = extent.ee_len;
+    if (!free_blocks(phys_start, len)) {
+      std::cerr << "unlink_entry: falha ao liberar blocos do inode "
+                << removed_inode_num << "\n";
+      return false;
+    }
+  }
+
+  // Limpa o inode alvo no disco, marcando-o como não alocado.
+  inode cleared{};
+  if (!update_inode(removed_inode_num, cleared)) {
+    std::cerr << "unlink_entry: falha ao limpar inode no disco\n";
+    return false;
+  }
+
+  return free_inode(
+      removed_inode_num,
+      inode_is_dir(target_inode)); // Libera o inode e atualiza os contadores de
+                                   // diretórios se necessário.
+}
+
+bool Ext4FS::is_dir_empty(uint32_t inode_num) {
+  // Um diretório é considerado vazio quando contém apenas as entradas "." e
+  // "..".
+  inode dir_inode;
+  if (!read_inode(inode_num, dir_inode) || !inode_is_dir(dir_inode)) {
+    return false;
+  }
+
+  std::vector<char> dir_content = read_inode_content(dir_inode);
+  size_t offset = 0;
+  uint32_t entry_count = 0;
+
+  // Percorre todas as entradas do diretório, contando apenas aquelas que
+  // possuem inode válido e nome não vazio.
+  while (offset < dir_content.size()) {
+    const ext4_dir_entry_2 *entry =
+        reinterpret_cast<const ext4_dir_entry_2 *>(&dir_content[offset]);
+    if (entry->rec_len == 0) {
+      break;
+    }
+
+    if (entry->inode != 0 && entry->name_len > 0) {
+      std::string name(entry->name, entry->name_len);
+      if (name != "." && name != "..") {
         return false;
+      }
+      ++entry_count;
     }
 
-    uint32_t req_len = dir_ent_min_len(name.length());
+    offset += entry->rec_len;
+  }
 
-    ext4_extent_header* hdr = reinterpret_cast<ext4_extent_header*>(parent_inode.i_block);
-    
-    bool space_found = false;
-    uint64_t target_phys_block = 0;
-    std::vector<char> block_buf(block_size, 0);
+  return entry_count <= 2;
+}
 
-    // tenta reaproveitar o último bloco
-    if (hdr->eh_magic == 0xF30A && hdr->eh_depth == 0 && hdr->eh_entries > 0) {
-        ext4_extent* exts = reinterpret_cast<ext4_extent*>(hdr + 1);
-        ext4_extent& last_ext = exts[hdr->eh_entries - 1];
-        
-        uint64_t phys_start = (static_cast<uint64_t>(last_ext.ee_start_hi) << 32) | last_ext.ee_start_lo;
-        target_phys_block = phys_start + last_ext.ee_len - 1; 
+bool Ext4FS::rename_entry(uint32_t parent_inode_num,
+                          const std::string &old_name,
+                          const std::string &new_name) {
+  // Renomeia uma entrada de diretório alterando o nome armazenado na entrada
+  // correspondente, sem mudar o inode alvo nem o diretório pai.
+  if (old_name.empty() || new_name.empty() ||
+      new_name.find('/') != std::string::npos) {
+    std::cerr << "rename_entry: nome inválido\n";
+    return false;
+  }
 
-        if (read_bytes(image, get_block_offset(target_phys_block), block_buf.data(), block_size)) {
-            uint32_t offset = 0;
-            ext4_dir_entry_2* entry = nullptr;
+  // Lê o inode do diretório pai para acessar suas entradas de diretório.
+  inode parent_inode;
+  if (!read_inode(parent_inode_num, parent_inode) ||
+      !inode_is_dir(parent_inode)) {
+    std::cerr << "rename_entry: diretório pai inválido\n";
+    return false;
+  }
 
-            // encontra a última entrada no diretório pai
-            while (offset < block_size) {
-                entry = reinterpret_cast<ext4_dir_entry_2*>(block_buf.data() + offset);
-                if (offset + entry->rec_len == block_size || entry->rec_len == 0) {
-                    break; 
-                }
-                offset += entry->rec_len;
-            }
+  // Verifica se o inode do diretório pai possui uma árvore de extents válida.
+  ext4_extent_header *hdr =
+      reinterpret_cast<ext4_extent_header *>(parent_inode.i_block);
+  if (hdr->eh_magic != 0xF30A || hdr->eh_depth != 0) {
+    std::cerr << "rename_entry: árvore de extents inválida\n";
+    return false;
+  }
 
-            if (entry != nullptr && entry->rec_len > 0) {
-                uint32_t min_len = 0;
-                if (entry->inode != 0) {
-                    min_len = (8 + entry->name_len + 3) & ~3;
-                }
+  // Percorre todos os extents do diretório pai para localizar a entrada de
+  // diretório com o nome antigo.
+  ext4_extent *extents = reinterpret_cast<ext4_extent *>(hdr + 1);
+  for (uint16_t i = 0; i < hdr->eh_entries; i++) {
+    uint64_t phys_start = get_extent_phys_block(extents[i]);
+    for (uint16_t j = 0; j < extents[i].ee_len; j++) {
+      // Calcula o bloco físico atual e lê seu conteúdo para procurar a entrada
+      // de diretório correspondente ao nome antigo.
+      uint64_t phys_block = phys_start + j;
+      std::vector<char> block_buf(block_size, 0);
+      if (!read_bytes(image, get_block_offset(phys_block), block_buf.data(),
+                      block_size)) {
+        continue;
+      }
 
-                uint32_t free_space = entry->rec_len - min_len;
-
-                // se houver espaço
-                if (free_space >= req_len) {
-                    if (min_len > 0) {
-                        entry->rec_len = min_len;
-                        
-                        ext4_dir_entry_2* new_entry = reinterpret_cast<ext4_dir_entry_2*>(block_buf.data() + offset + min_len);
-                        new_entry->inode = new_inode_num;
-                        new_entry->rec_len = free_space; // ocupa o resto do bloco; deve ser revertido ao escrever outro dir_entry (ou remover esse)
-                        new_entry->name_len = static_cast<uint8_t>(name.length());
-                        new_entry->file_type = file_type;
-                        std::memcpy(new_entry->name, name.c_str(), name.length());
-                    } else {
-                        // reaproveita inode deletado previametne
-                        entry->inode = new_inode_num;
-                        entry->name_len = static_cast<uint8_t>(name.length());
-                        entry->file_type = file_type;
-                        std::memcpy(entry->name, name.c_str(), name.length());
-                    }
-
-                    if (!write_block_bytes(target_phys_block, block_buf)) return false;
-                    space_found = true;
-                }
-            }
+      // Percorre todas as entradas de diretório no bloco físico para encontrar
+      // a entrada com o nome antigo.
+      uint32_t offset = 0;
+      while (offset < block_size) {
+        ext4_dir_entry_2 *entry =
+            reinterpret_cast<ext4_dir_entry_2 *>(block_buf.data() + offset);
+        if (entry->rec_len == 0) {
+          break;
         }
-    }
 
-    // se não ouver espaço, aloca um bloco novo e escreve nele
-    if (!space_found) {
-        uint64_t alloc_count = 0;
-        uint64_t new_phys_block = alloc_blocks(1, alloc_count);
-        if (new_phys_block == 0) return false;
-
-        std::fill(block_buf.begin(), block_buf.end(), 0);
-
-        ext4_dir_entry_2* new_entry = reinterpret_cast<ext4_dir_entry_2*>(block_buf.data());
-        new_entry->inode = new_inode_num;
-        new_entry->rec_len = block_size; 
-        new_entry->name_len = static_cast<uint8_t>(name.length());
-        new_entry->file_type = file_type;
-        std::memcpy(new_entry->name, name.c_str(), name.length());
-
-        if (!write_block_bytes(new_phys_block, block_buf)) return false;
-
-        // mapeia o novo bloco lógico no i_block do diretório pai
-        uint32_t logical_block = (get_file_size(parent_inode) + block_size - 1) / block_size;
-        if (!write_extent_to_inode(parent_inode_num, parent_inode, logical_block, new_phys_block, 1)) {
+        // Verifica se a entrada corresponde ao nome antigo e possui um inode
+        // válido.
+        if (entry->inode != 0 && entry->name_len == old_name.length() &&
+            std::string(entry->name, entry->name_len) == old_name) {
+          uint16_t req_len =
+              dir_ent_min_len(static_cast<uint8_t>(new_name.length()));
+          if (entry->rec_len < req_len) {
+            std::cerr << "rename_entry: espaço insuficiente na entrada de "
+                         "diretório\n";
             return false;
-        }
+          }
+          // Atualiza o nome da entrada de diretório para o novo nome.
+          entry->name_len = static_cast<uint8_t>(new_name.length());
+          std::memset(entry->name, 0, sizeof(entry->name));
+          std::memcpy(entry->name, new_name.c_str(), new_name.length());
 
-        uint64_t new_size = get_file_size(parent_inode) + block_size;
-        parent_inode.i_size_lo = static_cast<uint32_t>(new_size & 0xFFFFFFFF);
-        parent_inode.i_size_high = static_cast<uint32_t>((new_size >> 32) & 0xFFFFFFFF);
-        parent_inode.i_blocks_lo += (block_size / 512);
-    }
-
-    parent_inode.i_mtime = time(NULL);
-    parent_inode.i_ctime = time(NULL);
-
-    static constexpr uint8_t EXT4_FT_DIR = 2;
-    if (file_type == EXT4_FT_DIR) {
-        parent_inode.i_links_count++;
-
-        uint32_t parent_bg = get_inode_block_group(parent_inode_num);
-        set_gd_used_dirs_count(parent_bg, get_gd_used_dirs_count(parent_bg) + 1);
-        if (!update_gdt_entry(parent_bg)) {
+          if (!write_block_bytes(phys_block, block_buf)) {
+            std::cerr << "rename_entry: falha ao escrever bloco do diretório\n";
             return false;
-        }
-    }
+          }
 
-    return update_inode(parent_inode_num, parent_inode);
+          // Atualiza os timestamps do inode do diretório pai para refletir a
+          // modificação.
+          parent_inode.i_mtime = time(nullptr);
+          parent_inode.i_ctime = parent_inode.i_mtime;
+          return update_inode(parent_inode_num, parent_inode);
+        }
+
+        offset += entry->rec_len;
+      }
+    }
+  }
+
+  return false;
 }
 
 bool Ext4FS::free_inode(uint32_t inode_num, bool is_dir) {
-    if (inode_num == 0 || inode_num > sb.s_inodes_count) {
-        std::cerr << "free_inode: Número de Inode inválido.\n";
-        return false;
+  if (inode_num == 0 || inode_num > sb.s_inodes_count) {
+    std::cerr << "free_inode: Número de Inode inválido.\n";
+    return false;
+  }
+
+  uint32_t bg = get_inode_block_group(inode_num);
+  uint32_t inode_bit_offset = get_inode_bitmap_offset(inode_num);
+
+  uint64_t bitmap_block = get_inode_bitmap_block(bg);
+  uint64_t offset = get_block_offset(bitmap_block);
+  std::vector<char> bitmap(block_size, 0);
+
+  if (!read_bytes(image, offset, bitmap.data(), block_size)) {
+    std::cerr << "free_inode: Erro ao ler Inode Bitmap\n";
+    return false;
+  }
+
+  clear_bit(bitmap, inode_bit_offset);
+
+  if (!update_inode_bitmap(bg, bitmap)) {
+    return false;
+  }
+
+  set_gd_free_inodes_count(bg, get_gd_free_inodes_count(bg) + 1);
+  if (is_dir) {
+    uint32_t used_dirs = get_gd_used_dirs_count(bg);
+    if (used_dirs > 0) {
+      set_gd_used_dirs_count(bg, used_dirs - 1);
     }
+  }
+  update_gdt_entry(bg);
 
-    uint32_t bg = get_inode_block_group(inode_num);
-    uint32_t inode_bit_offset = get_inode_bitmap_offset(inode_num);
-    
-    uint64_t bitmap_block = get_inode_bitmap_block(bg);
-    uint64_t offset = get_block_offset(bitmap_block);
-    std::vector<char> bitmap(block_size, 0);
-    
-    if (!read_bytes(image, offset, bitmap.data(), block_size)) {
-        std::cerr << "free_inode: Erro ao ler Inode Bitmap\n";
-        return false;
-    }
-
-    clear_bit(bitmap, inode_bit_offset);
-
-    if (!update_inode_bitmap(bg, bitmap)) {
-        return false;
-    }
-
-    set_gd_free_inodes_count(bg, get_gd_free_inodes_count(bg) + 1);
-    if (is_dir) {
-        uint32_t used_dirs = get_gd_used_dirs_count(bg);
-        if (used_dirs > 0) {
-            set_gd_used_dirs_count(bg, used_dirs - 1);
-        }
-    }
-    update_gdt_entry(bg);
-
-    sb.s_free_inodes_count++;
-    return update_sb(); 
+  sb.s_free_inodes_count++;
+  return update_sb();
 }
 
 bool Ext4FS::free_blocks(uint64_t start_phys_block, uint64_t count) {
-    if (start_phys_block == 0 || count == 0) return false;
+  if (start_phys_block == 0 || count == 0)
+    return false;
 
-    uint32_t current_bg = 0xFFFFFFFF; 
-    std::vector<char> bitmap(block_size, 0);
-    uint64_t freed_in_current_group = 0;
-    uint64_t total_freed = 0;
+  uint32_t current_bg = 0xFFFFFFFF;
+  std::vector<char> bitmap(block_size, 0);
+  uint64_t freed_in_current_group = 0;
+  uint64_t total_freed = 0;
 
-    for (uint64_t i = 0; i < count; i++) {
-        uint64_t current_block = start_phys_block + i;
-        
-        uint32_t bg = get_block_block_group(current_block);
-        uint32_t block_bit_offset = get_block_bitmap_offset(current_block);
+  for (uint64_t i = 0; i < count; i++) {
+    uint64_t current_block = start_phys_block + i;
 
-        if (bg != current_bg) {
-            if (current_bg != 0xFFFFFFFF) {
-                update_block_bitmap(current_bg, bitmap);
-                set_gd_free_blocks_count(
-                    current_bg, get_gd_free_blocks_count(current_bg) + freed_in_current_group);
-                update_gdt_entry(current_bg);
-            }
+    uint32_t bg = get_block_block_group(current_block);
+    uint32_t block_bit_offset = get_block_bitmap_offset(current_block);
 
-            current_bg = bg;
-            freed_in_current_group = 0;
-            uint64_t bitmap_block = get_block_bitmap_block(bg);
-            if (!read_bytes(image, get_block_offset(bitmap_block), bitmap.data(), block_size)) {
-                return false;
-            }
-        }
-
-        clear_bit(bitmap, block_bit_offset);
-
-        freed_in_current_group++;
-        total_freed++;
-    }
-
-    if (current_bg != 0xFFFFFFFF) {
+    if (bg != current_bg) {
+      if (current_bg != 0xFFFFFFFF) {
         update_block_bitmap(current_bg, bitmap);
-        set_gd_free_blocks_count(
-            current_bg, get_gd_free_blocks_count(current_bg) + freed_in_current_group);
+        set_gd_free_blocks_count(current_bg,
+                                 get_gd_free_blocks_count(current_bg) +
+                                     freed_in_current_group);
         update_gdt_entry(current_bg);
+      }
+
+      current_bg = bg;
+      freed_in_current_group = 0;
+      uint64_t bitmap_block = get_block_bitmap_block(bg);
+      if (!read_bytes(image, get_block_offset(bitmap_block), bitmap.data(),
+                      block_size)) {
+        return false;
+      }
     }
 
-    uint64_t new_free_blocks = get_free_blocks_count() + total_freed;
-    sb.s_free_blocks_count_lo = static_cast<uint32_t>(new_free_blocks & 0xFFFFFFFFULL);
-    sb.s_free_blocks_count_hi = static_cast<uint32_t>((new_free_blocks >> 32) & 0xFFFFFFFFULL);
+    clear_bit(bitmap, block_bit_offset);
 
-    return update_sb();
+    freed_in_current_group++;
+    total_freed++;
+  }
+
+  if (current_bg != 0xFFFFFFFF) {
+    update_block_bitmap(current_bg, bitmap);
+    set_gd_free_blocks_count(current_bg, get_gd_free_blocks_count(current_bg) +
+                                             freed_in_current_group);
+    update_gdt_entry(current_bg);
+  }
+
+  uint64_t new_free_blocks = get_free_blocks_count() + total_freed;
+  sb.s_free_blocks_count_lo =
+      static_cast<uint32_t>(new_free_blocks & 0xFFFFFFFFULL);
+  sb.s_free_blocks_count_hi =
+      static_cast<uint32_t>((new_free_blocks >> 32) & 0xFFFFFFFFULL);
+
+  return update_sb();
 }
 
-uint32_t Ext4FS::remove_dir_entry(uint32_t parent_inode_num, const std::string &target_name) {
-    inode parent_inode;
-    if (!read_inode(parent_inode_num, parent_inode)) {
-        return 0; 
-    }
-
-    ext4_extent_header* hdr = reinterpret_cast<ext4_extent_header*>(parent_inode.i_block);
-    
-    if (hdr->eh_magic != 0xF30A || hdr->eh_depth != 0) {
-        return 0;
-    }
-
-    ext4_extent* exts = reinterpret_cast<ext4_extent*>(hdr + 1);
-
-    for (uint16_t i = 0; i < hdr->eh_entries; i++) {
-        uint64_t phys_start = (static_cast<uint64_t>(exts[i].ee_start_hi) << 32) | exts[i].ee_start_lo;
-        
-        for (uint16_t j = 0; j < exts[i].ee_len; j++) {
-            uint64_t phys_block = phys_start + j;
-            
-            std::vector<char> block_buf(block_size, 0);
-            if (!read_bytes(image, get_block_offset(phys_block), block_buf.data(), block_size)) {
-                continue;
-            }
-
-            uint32_t offset = 0;
-            ext4_dir_entry_2* prev_entry = nullptr;
-
-            while (offset < block_size) {
-                ext4_dir_entry_2* entry = reinterpret_cast<ext4_dir_entry_2*>(block_buf.data() + offset);
-
-                if (entry->rec_len == 0) break; 
-
-                if (entry->inode != 0 && entry->name_len == target_name.length()) {
-                    if (std::string(entry->name, entry->name_len) == target_name) {
-                        uint32_t removed_inode_num = entry->inode;
-                        uint8_t removed_file_type = entry->file_type;
-
-                        if (prev_entry != nullptr) {
-                            prev_entry->rec_len += entry->rec_len;
-                        } else {
-                            entry->inode = 0;
-                        }
-
-                        if (!write_block_bytes(phys_block, block_buf)) {
-                            return 0;
-                        }
-
-                        parent_inode.i_mtime = time(NULL);
-                        parent_inode.i_ctime = time(NULL);
-
-                        static constexpr uint8_t EXT4_FT_DIR = 2;
-                        if (removed_file_type == EXT4_FT_DIR &&
-                            parent_inode.i_links_count > 0) {
-                            parent_inode.i_links_count--;
-                        }
-
-                        update_inode(parent_inode_num, parent_inode);
-
-                        return removed_inode_num; 
-                    }
-                }
-
-                prev_entry = entry;
-                offset += entry->rec_len;
-            }
-        }
-    }
-
-    return 0;
-}
-
-uint32_t Ext4FS::find_inode_in_dir(uint32_t parent_inode_num, const std::string &name) {
+uint32_t Ext4FS::remove_dir_entry(uint32_t parent_inode_num,
+                                  const std::string &target_name) {
   inode parent_inode;
   if (!read_inode(parent_inode_num, parent_inode)) {
-    std::cerr << "find_inode_in_dir: erro ao ler inode pai "<< parent_inode_num << "\n";
     return 0;
   }
- 
+
+  ext4_extent_header *hdr =
+      reinterpret_cast<ext4_extent_header *>(parent_inode.i_block);
+
+  if (hdr->eh_magic != 0xF30A || hdr->eh_depth != 0) {
+    return 0;
+  }
+
+  ext4_extent *exts = reinterpret_cast<ext4_extent *>(hdr + 1);
+
+  for (uint16_t i = 0; i < hdr->eh_entries; i++) {
+    uint64_t phys_start = (static_cast<uint64_t>(exts[i].ee_start_hi) << 32) |
+                          exts[i].ee_start_lo;
+
+    for (uint16_t j = 0; j < exts[i].ee_len; j++) {
+      uint64_t phys_block = phys_start + j;
+
+      std::vector<char> block_buf(block_size, 0);
+      if (!read_bytes(image, get_block_offset(phys_block), block_buf.data(),
+                      block_size)) {
+        continue;
+      }
+
+      uint32_t offset = 0;
+      ext4_dir_entry_2 *prev_entry = nullptr;
+
+      while (offset < block_size) {
+        ext4_dir_entry_2 *entry =
+            reinterpret_cast<ext4_dir_entry_2 *>(block_buf.data() + offset);
+
+        if (entry->rec_len == 0)
+          break;
+
+        if (entry->inode != 0 && entry->name_len == target_name.length()) {
+          if (std::string(entry->name, entry->name_len) == target_name) {
+            uint32_t removed_inode_num = entry->inode;
+            uint8_t removed_file_type = entry->file_type;
+
+            if (prev_entry != nullptr) {
+              prev_entry->rec_len += entry->rec_len;
+            } else {
+              entry->inode = 0;
+            }
+
+            if (!write_block_bytes(phys_block, block_buf)) {
+              return 0;
+            }
+
+            parent_inode.i_mtime = time(NULL);
+            parent_inode.i_ctime = time(NULL);
+
+            static constexpr uint8_t EXT4_FT_DIR = 2;
+            if (removed_file_type == EXT4_FT_DIR &&
+                parent_inode.i_links_count > 0) {
+              parent_inode.i_links_count--;
+            }
+
+            update_inode(parent_inode_num, parent_inode);
+
+            return removed_inode_num;
+          }
+        }
+
+        prev_entry = entry;
+        offset += entry->rec_len;
+      }
+    }
+  }
+
+  return 0;
+}
+
+uint32_t Ext4FS::find_inode_in_dir(uint32_t parent_inode_num,
+                                   const std::string &name) {
+  inode parent_inode;
+  if (!read_inode(parent_inode_num, parent_inode)) {
+    std::cerr << "find_inode_in_dir: erro ao ler inode pai " << parent_inode_num
+              << "\n";
+    return 0;
+  }
+
   if (!inode_is_dir(parent_inode)) {
-    std::cerr << "find_inode_in_dir: inode " << parent_inode_num<< " não é um diretório\n";
+    std::cerr << "find_inode_in_dir: inode " << parent_inode_num
+              << " não é um diretório\n";
     return 0;
   }
- 
+
   std::vector<char> dir_content = read_inode_content(parent_inode);
   if (dir_content.empty()) {
     return 0;
   }
- 
+
   return find_inode_by_dir(dir_content, name);
 }
