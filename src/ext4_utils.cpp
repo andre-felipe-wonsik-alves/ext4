@@ -145,21 +145,24 @@ bool Ext4FS::read_inode(uint32_t inode_num, inode &inode_out) {
       std::min(sizeof(inode), static_cast<size_t>(sb.s_inode_size));
   std::memcpy(&inode_out, inode_buf.data(), copy_size);
 
-  // Validação de Checksum
-  uint32_t calculated =
-      checksum_inode(reinterpret_cast<char *>(sb.s_uuid), inode_num,
-                     inode_out.i_generation, inode_buf.data());
-  uint32_t stored_checksum =
-      (static_cast<uint32_t>(inode_out.i_checksum_hi) << 16) |
-      inode_out.osd2.linux2.l_i_checksum_lo;
-  if (calculated != stored_checksum) {
-    std::cerr
-        << "\n[ERROR] Inode " << inode_num
-        << " checksum mismatch! The file or directory entry is corrupted.\n"
-        << "Calculated Checksum: " << calculated << "\n"
-        << "Stored Checksum:     " << stored_checksum << "\n"
-        << "Skipping reading to prevent using corrupted inode metadata.\n\n";
-    return false;
+  // Validação de Checksum (apenas se o inode estiver alocado/em uso)
+  bool is_allocated = (inode_out.i_links_count != 0 || inode_out.i_mode != 0);
+  if (is_allocated) {
+    uint32_t calculated =
+        checksum_inode(reinterpret_cast<char *>(sb.s_uuid), inode_num,
+                       inode_out.i_generation, inode_buf.data());
+    uint32_t stored_checksum =
+        (static_cast<uint32_t>(inode_out.i_checksum_hi) << 16) |
+        inode_out.osd2.linux2.l_i_checksum_lo;
+    if (calculated != stored_checksum) {
+      std::cerr
+          << "\n[ERROR] Inode " << inode_num
+          << " checksum mismatch! The file or directory entry is corrupted.\n"
+          << "Calculated Checksum: " << calculated << "\n"
+          << "Stored Checksum:     " << stored_checksum << "\n"
+          << "Skipping reading to prevent using corrupted inode metadata.\n\n";
+      return false;
+    }
   }
 
   return true;
@@ -600,7 +603,7 @@ bool Ext4FS::update_block_bitmap(uint64_t bg, const std::vector<char> &bitmap) {
   uint64_t bitmap_block = get_block_bitmap_block(static_cast<uint32_t>(bg));
   uint64_t offset = get_block_offset(bitmap_block);
 
-  // 1. Read current bitmap from disk for validation
+  // 1. Lê o bitmap para validação
   std::vector<char> on_disk_bitmap(block_size);
   if (!read_bytes(image, offset, on_disk_bitmap.data(), block_size)) {
     std::cerr << "update_block_bitmap: erro ao ler bitmap do grupo " << bg
@@ -608,7 +611,7 @@ bool Ext4FS::update_block_bitmap(uint64_t bg, const std::vector<char> &bitmap) {
     return false;
   }
 
-  // 2. Validate current checksum
+  // 2. Valida o checksum
   uint32_t calculated =
       checksum_bitmap(reinterpret_cast<char *>(sb.s_uuid),
                       on_disk_bitmap.data(), sb.s_blocks_per_group / 8);
@@ -624,7 +627,7 @@ bool Ext4FS::update_block_bitmap(uint64_t bg, const std::vector<char> &bitmap) {
     return false;
   }
 
-  // 3. Compute new checksum and update memory state in GDT entry
+  // 3. Computa o novo checksum
   uint32_t new_calculated = checksum_bitmap(reinterpret_cast<char *>(sb.s_uuid),
                                             const_cast<char *>(bitmap.data()),
                                             sb.s_blocks_per_group / 8);
@@ -657,7 +660,7 @@ bool Ext4FS::update_inode(uint32_t inode_num, const inode &inode_in) {
   uint64_t offset =
       get_block_offset(inode_table_block) + index * sb.s_inode_size;
 
-  // 1. Read current inode from disk for validation
+  // 1. Lê o Inode atual para a validação
   std::vector<char> on_disk_inode_buf(256, 0);
   size_t bytes_to_read =
       std::min(static_cast<size_t>(sb.s_inode_size), on_disk_inode_buf.size());
@@ -667,25 +670,28 @@ bool Ext4FS::update_inode(uint32_t inode_num, const inode &inode_in) {
     return false;
   }
 
-  // 2. Validate current checksum
+  // 2. Valida o checksum atual (apenas se o Inode estiver alocadi)
   inode on_disk_inode{};
   size_t copy_size =
       std::min(sizeof(inode), static_cast<size_t>(sb.s_inode_size));
   std::memcpy(&on_disk_inode, on_disk_inode_buf.data(), copy_size);
 
-  uint32_t calculated =
-      checksum_inode(reinterpret_cast<char *>(sb.s_uuid), inode_num,
-                     on_disk_inode.i_generation, on_disk_inode_buf.data());
-  uint32_t stored_checksum =
-      (static_cast<uint32_t>(on_disk_inode.i_checksum_hi) << 16) |
-      on_disk_inode.osd2.linux2.l_i_checksum_lo;
-  if (calculated != stored_checksum) {
-    std::cerr << "\n[ERROR] Inode " << inode_num
-              << " checksum mismatch on disk before write!\n"
-              << "Calculated Checksum: " << calculated << "\n"
-              << "Stored Checksum:     " << stored_checksum << "\n"
-              << "Skipping write to prevent corruption.\n\n";
-    return false;
+  bool is_allocated = (on_disk_inode.i_links_count != 0 || on_disk_inode.i_mode != 0);
+  if (is_allocated) {
+    uint32_t calculated =
+        checksum_inode(reinterpret_cast<char *>(sb.s_uuid), inode_num,
+                       on_disk_inode.i_generation, on_disk_inode_buf.data());
+    uint32_t stored_checksum =
+        (static_cast<uint32_t>(on_disk_inode.i_checksum_hi) << 16) |
+        on_disk_inode.osd2.linux2.l_i_checksum_lo;
+    if (calculated != stored_checksum) {
+      std::cerr << "\n[ERROR] Inode " << inode_num
+                << " checksum mismatch on disk before write!\n"
+                << "Calculated Checksum: " << calculated << "\n"
+                << "Stored Checksum:     " << stored_checksum << "\n"
+                << "Skipping write to prevent corruption.\n\n";
+      return false;
+    }
   }
 
   // 3. Compute new checksum and update fields in our copy
