@@ -67,5 +67,7 @@ Testing/
 .cache/
 resources/
 
+*.py
+
 # images
 *.img
