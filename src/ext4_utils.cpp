@@ -423,7 +423,7 @@ bool Ext4FS::inode_is_used(uint32_t inode_num)
   }
 
   // Validação de Checksum
-  uint32_t calculated = checksum_bitmap(reinterpret_cast<char *>(sb.s_uuid), bitmap.data(), block_size);
+  uint32_t calculated = checksum_bitmap(reinterpret_cast<char *>(sb.s_uuid), bitmap.data(), sb.s_inodes_per_group / 8);
   const group_description &gd = gdt[bg];
   uint32_t stored = (static_cast<uint32_t>(gd.bg_inode_bitmap_csum_hi) << 16) | gd.bg_inode_bitmap_csum_lo;
   if (calculated != stored)
@@ -458,7 +458,7 @@ bool Ext4FS::block_is_used(uint64_t block_num)
   }
 
   // Validação de Checksum
-  uint32_t calculated = checksum_bitmap(reinterpret_cast<char *>(sb.s_uuid), bitmap.data(), block_size);
+  uint32_t calculated = checksum_bitmap(reinterpret_cast<char *>(sb.s_uuid), bitmap.data(), sb.s_blocks_per_group / 8);
   const group_description &gd = gdt[bg];
   uint32_t stored = (static_cast<uint32_t>(gd.bg_block_bitmap_csum_hi) << 16) | gd.bg_block_bitmap_csum_lo;
   if (calculated != stored)
@@ -476,6 +476,29 @@ bool Ext4FS::block_is_used(uint64_t block_num)
 // update_sb: persiste o superbloco em memória na imagem
 bool Ext4FS::update_sb()
 {
+  // 1. Read current superblock from disk for validation
+  super_block on_disk_sb;
+  if (!read_bytes(image, 1024, &on_disk_sb, sizeof(super_block)))
+  {
+    std::cerr << "update_sb: erro ao ler superbloco para validação\n";
+    return false;
+  }
+
+  // 2. Validate current checksum
+  uint32_t calculated = checksum_superblock(reinterpret_cast<char *>(&on_disk_sb));
+  if (calculated != on_disk_sb.s_checksum)
+  {
+    std::cerr << "\n[ERROR] Superblock checksum mismatch on disk before write!\n"
+              << "Calculated Checksum: " << calculated << "\n"
+              << "Stored Checksum:     " << on_disk_sb.s_checksum << "\n"
+              << "Skipping write to prevent corruption.\n\n";
+    return false;
+  }
+
+  // 3. Compute new checksum and update sb
+  sb.s_checksum = checksum_superblock(reinterpret_cast<char *>(&sb));
+
+  // 4. Do the write
   if (!write_bytes(image, 1024, &sb, sizeof(super_block)))
   {
     std::cerr << "update_sb: erro ao escrever superbloco\n";
@@ -490,6 +513,30 @@ bool Ext4FS::update_gdt_entry(uint64_t bg)
   uint16_t current_desc_size = (sb.s_desc_size == 0) ? 32 : sb.s_desc_size; // 32 bytes se a feature 64bit não estiver ativa, 64 bytes caso contrário
   uint64_t offset = get_gdt_entry_offset(bg);
 
+  // 1. Read current group descriptor from disk for validation
+  group_description on_disk_gd{};
+  std::memset(&on_disk_gd, 0, sizeof(on_disk_gd));
+  if (!read_bytes(image, offset, &on_disk_gd, current_desc_size))
+  {
+    std::cerr << "update_gdt_entry: erro ao ler GDT do grupo " << bg << " para validação\n";
+    return false;
+  }
+
+  // 2. Validate current checksum
+  uint16_t calculated = checksum_group(reinterpret_cast<char *>(sb.s_uuid), bg, reinterpret_cast<char *>(&on_disk_gd));
+  if (calculated != on_disk_gd.bg_checksum)
+  {
+    std::cerr << "\n[ERROR] Group Descriptor " << bg << " checksum mismatch on disk before write!\n"
+              << "Calculated Checksum: " << calculated << "\n"
+              << "Stored Checksum:     " << on_disk_gd.bg_checksum << "\n"
+              << "Skipping write to prevent corruption.\n\n";
+    return false;
+  }
+
+  // 3. Compute new checksum and update GDT entry in memory
+  gdt[bg].bg_checksum = checksum_group(reinterpret_cast<char *>(sb.s_uuid), bg, reinterpret_cast<char *>(&gdt[bg]));
+
+  // 4. Do the write
   if (!write_bytes(image, offset, &gdt[bg], current_desc_size))
   {
     std::cerr << "update_gdt_entry: erro ao escrever GDT entry do grupo " << bg << "\n";
@@ -504,6 +551,33 @@ bool Ext4FS::update_inode_bitmap(uint64_t bg, const std::vector<char> &bitmap)
   uint64_t bitmap_block = get_inode_bitmap_block(static_cast<uint32_t>(bg));
   uint64_t offset = get_block_offset(bitmap_block);
 
+  // 1. Read current bitmap from disk for validation
+  std::vector<char> on_disk_bitmap(block_size);
+  if (!read_bytes(image, offset, on_disk_bitmap.data(), block_size))
+  {
+    std::cerr << "update_inode_bitmap: erro ao ler bitmap do grupo " << bg << " para validação\n";
+    return false;
+  }
+
+  // 2. Validate current checksum
+  uint32_t calculated = checksum_bitmap(reinterpret_cast<char *>(sb.s_uuid), on_disk_bitmap.data(), sb.s_inodes_per_group / 8);
+  const group_description &gd = gdt[bg];
+  uint32_t stored = (static_cast<uint32_t>(gd.bg_inode_bitmap_csum_hi) << 16) | gd.bg_inode_bitmap_csum_lo;
+  if (calculated != stored)
+  {
+    std::cerr << "\n[ERROR] Inode bitmap for block group " << bg << " checksum mismatch on disk before write!\n"
+              << "Calculated Checksum: " << calculated << "\n"
+              << "Stored Checksum:     " << stored << "\n"
+              << "Skipping write to prevent corruption.\n\n";
+    return false;
+  }
+
+  // 3. Compute new checksum and update memory state in GDT entry
+  uint32_t new_calculated = checksum_bitmap(reinterpret_cast<char *>(sb.s_uuid), const_cast<char *>(bitmap.data()), sb.s_inodes_per_group / 8);
+  gdt[bg].bg_inode_bitmap_csum_lo = static_cast<uint16_t>(new_calculated & 0xFFFF);
+  gdt[bg].bg_inode_bitmap_csum_hi = static_cast<uint16_t>((new_calculated >> 16) & 0xFFFF);
+
+  // 4. Do the write
   if (!write_bytes(image, offset, const_cast<char *>(bitmap.data()), block_size))
   {
     std::cerr << "update_inode_bitmap: erro ao escrever bitmap do grupo " << bg << "\n";
@@ -518,6 +592,33 @@ bool Ext4FS::update_block_bitmap(uint64_t bg, const std::vector<char> &bitmap)
   uint64_t bitmap_block = get_block_bitmap_block(static_cast<uint32_t>(bg));
   uint64_t offset = get_block_offset(bitmap_block);
 
+  // 1. Read current bitmap from disk for validation
+  std::vector<char> on_disk_bitmap(block_size);
+  if (!read_bytes(image, offset, on_disk_bitmap.data(), block_size))
+  {
+    std::cerr << "update_block_bitmap: erro ao ler bitmap do grupo " << bg << " para validação\n";
+    return false;
+  }
+
+  // 2. Validate current checksum
+  uint32_t calculated = checksum_bitmap(reinterpret_cast<char *>(sb.s_uuid), on_disk_bitmap.data(), sb.s_blocks_per_group / 8);
+  const group_description &gd = gdt[bg];
+  uint32_t stored = (static_cast<uint32_t>(gd.bg_block_bitmap_csum_hi) << 16) | gd.bg_block_bitmap_csum_lo;
+  if (calculated != stored)
+  {
+    std::cerr << "\n[ERROR] Block bitmap for block group " << bg << " checksum mismatch on disk before write!\n"
+              << "Calculated Checksum: " << calculated << "\n"
+              << "Stored Checksum:     " << stored << "\n"
+              << "Skipping write to prevent corruption.\n\n";
+    return false;
+  }
+
+  // 3. Compute new checksum and update memory state in GDT entry
+  uint32_t new_calculated = checksum_bitmap(reinterpret_cast<char *>(sb.s_uuid), const_cast<char *>(bitmap.data()), sb.s_blocks_per_group / 8);
+  gdt[bg].bg_block_bitmap_csum_lo = static_cast<uint16_t>(new_calculated & 0xFFFF);
+  gdt[bg].bg_block_bitmap_csum_hi = static_cast<uint16_t>((new_calculated >> 16) & 0xFFFF);
+
+  // 4. Do the write
   if (!write_bytes(image, offset, const_cast<char *>(bitmap.data()), block_size))
   {
     std::cerr << "update_block_bitmap: erro ao escrever bitmap do grupo " << bg << "\n";
@@ -540,7 +641,43 @@ bool Ext4FS::update_inode(uint32_t inode_num, const inode &inode_in)
   uint64_t inode_table_block = get_inode_table_block(bg);
   uint64_t offset = get_block_offset(inode_table_block) + index * sb.s_inode_size;
 
-  if (!write_bytes(image, offset, const_cast<inode *>(&inode_in), sizeof(inode_in)))
+  // 1. Read current inode from disk for validation
+  std::vector<char> on_disk_inode_buf(256, 0);
+  size_t bytes_to_read = std::min(static_cast<size_t>(sb.s_inode_size), on_disk_inode_buf.size());
+  if (!read_bytes(image, offset, on_disk_inode_buf.data(), bytes_to_read))
+  {
+    std::cerr << "update_inode: erro ao ler inode " << inode_num << " para validação\n";
+    return false;
+  }
+
+  // 2. Validate current checksum
+  inode on_disk_inode{};
+  size_t copy_size = std::min(sizeof(inode), static_cast<size_t>(sb.s_inode_size));
+  std::memcpy(&on_disk_inode, on_disk_inode_buf.data(), copy_size);
+
+  uint32_t calculated = checksum_inode(reinterpret_cast<char *>(sb.s_uuid), inode_num, on_disk_inode.i_generation, on_disk_inode_buf.data());
+  uint32_t stored_checksum = (static_cast<uint32_t>(on_disk_inode.i_checksum_hi) << 16) | on_disk_inode.osd2.linux2.l_i_checksum_lo;
+  if (calculated != stored_checksum)
+  {
+    std::cerr << "\n[ERROR] Inode " << inode_num << " checksum mismatch on disk before write!\n"
+              << "Calculated Checksum: " << calculated << "\n"
+              << "Stored Checksum:     " << stored_checksum << "\n"
+              << "Skipping write to prevent corruption.\n\n";
+    return false;
+  }
+
+  // 3. Compute new checksum and update fields in our copy
+  inode new_inode = inode_in;
+  std::vector<char> new_inode_buf(256, 0);
+  std::memcpy(new_inode_buf.data(), &new_inode, copy_size);
+
+  uint32_t new_calculated = checksum_inode(reinterpret_cast<char *>(sb.s_uuid), inode_num, new_inode.i_generation, new_inode_buf.data());
+  new_inode.osd2.linux2.l_i_checksum_lo = static_cast<uint16_t>(new_calculated & 0xFFFF);
+  new_inode.i_checksum_hi = static_cast<uint16_t>((new_calculated >> 16) & 0xFFFF);
+
+  // 4. Do the write
+  size_t write_size = std::min(sizeof(inode), static_cast<size_t>(sb.s_inode_size));
+  if (!write_bytes(image, offset, &new_inode, write_size))
   {
     std::cerr << "update_inode: erro ao escrever inode " << inode_num << "\n";
     return false;
