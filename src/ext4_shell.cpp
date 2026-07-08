@@ -11,7 +11,6 @@
 #include <string>
 #include <utility>
 
-
 // Construtor: inicializa o SA e registra os comandos no mapa de dispatch
 Ext4Shell::Ext4Shell(const std::string &img_path)
     : curr_inode(2), curr_path("/"), img_path(img_path) {
@@ -31,8 +30,7 @@ Ext4Shell::Ext4Shell(const std::string &img_path)
       [this](const std::vector<std::string> &) -> void { commands(); });
 
   commandsMap.emplace(
-      "info",
-      [this](const std::vector<std::string> &) -> void { info(); });
+      "info", [this](const std::vector<std::string> &) -> void { info(); });
 
   commandsMap.emplace(
       "cat", [this](const std::vector<std::string> &args) -> void {
@@ -46,7 +44,8 @@ Ext4Shell::Ext4Shell(const std::string &img_path)
   commandsMap.emplace(
       "attr", [this](const std::vector<std::string> &args) -> void {
         if (args.empty()) {
-          std::cout << "[!] Caminho precisa ser informado para o comando attr\n";
+          std::cout
+              << "[!] Caminho precisa ser informado para o comando attr\n";
           return;
         }
         attr(args[0]);
@@ -62,62 +61,65 @@ Ext4Shell::Ext4Shell(const std::string &img_path)
       });
 
   commandsMap.emplace(
-      "ls",
-      [this](const std::vector<std::string> &) -> void { ls(); });
+      "ls", [this](const std::vector<std::string> &) -> void { ls(); });
 
   commandsMap.emplace(
       "testi", [this](const std::vector<std::string> &args) -> void {
         if (args.empty()) {
-          std::cout << "[!] O número do inode precisa ser informado para o comando testi\n";
+          std::cout << "[!] O número do inode precisa ser informado para o "
+                       "comando testi\n";
           return;
         }
         try {
           uint32_t inode_num = static_cast<uint32_t>(std::stoul(args[0]));
           testi(inode_num);
         } catch (const std::exception &) {
-          std::cout << "[!] Erro: o argumento do testi precisa ser um número válido\n";
+          std::cout << "[!] Erro: o argumento do testi precisa ser um número "
+                       "válido\n";
         }
       });
 
   commandsMap.emplace(
       "testb", [this](const std::vector<std::string> &args) -> void {
         if (args.empty()) {
-          std::cout << "[!] O número do bloco precisa ser informado para o comando testb\n";
+          std::cout << "[!] O número do bloco precisa ser informado para o "
+                       "comando testb\n";
           return;
         }
         try {
           uint32_t block_num = static_cast<uint32_t>(std::stoul(args[0]));
           testb(block_num);
         } catch (const std::exception &) {
-          std::cout << "[!] Erro: o argumento do testb precisa ser um número válido\n";
+          std::cout << "[!] Erro: o argumento do testb precisa ser um número "
+                       "válido\n";
         }
       });
 
-  commandsMap.emplace(
-      "export", [this](const std::vector<std::string> &args) -> void {
-        if (args.size() < 2) {
-          std::cout << "[!] Origem e destino precisam ser informados para o comando export\n";
-          return;
-        }
-        ext4_export(args[0], args[1]);
-      });
+  commandsMap.emplace("export",
+                      [this](const std::vector<std::string> &args) -> void {
+                        if (args.size() < 2) {
+                          std::cout << "[!] Origem e destino precisam ser "
+                                       "informados para o comando export\n";
+                          return;
+                        }
+                        ext4_export(args[0], args[1]);
+                      });
 
   commandsMap.emplace(
-      "pwd",
-      [this](const std::vector<std::string> &) -> void { pwd(); });
+      "pwd", [this](const std::vector<std::string> &) -> void { pwd(); });
+
+  commandsMap.emplace("import",
+                      [this](const std::vector<std::string> &args) -> void {
+                        if (args.size() < 2) {
+                          std::cout << "[!] Origem e destino precisam ser "
+                                       "informados para o comando import\n";
+                          return;
+                        }
+                        ext4_import(args[0], args[1]);
+                      });
 
   commandsMap.emplace(
-      "import", [this](const std::vector<std::string> &args) -> void {
-        if (args.size() < 2) {
-          std::cout << "[!] Origem e destino precisam ser informados para o comando import\n";
-          return;
-        }
-        ext4_import(args[0], args[1]);
-      });
-
-  commandsMap.emplace(
-      "ialloc",
-      [this](const std::vector<std::string> &) -> void { ialloc(); });
+      "ialloc", [this](const std::vector<std::string> &) -> void { ialloc(); });
 
   commandsMap.emplace(
       "balloc", [this](const std::vector<std::string> &args) -> void {
@@ -130,6 +132,16 @@ Ext4Shell::Ext4Shell(const std::string &img_path)
           }
         }
         balloc(count);
+      });
+
+  commandsMap.emplace(
+      "mkdir", [this](const std::vector<std::string> &args) -> void {
+        if (args.size() < 1) {
+          std::cout
+              << "[!] Nome do diretório a ser criado precisa ser informado\n";
+          return;
+        }
+        mkdir(args[0]);
       });
 }
 
@@ -203,7 +215,8 @@ uint32_t Ext4Shell::resolve_path(const std::string &path) {
   return fs.find_inode_by_path(path, curr_inode);
 }
 
-// info: exibe o resumo da imagem, do espaço do SA e o dump completo do superbloco
+// info: exibe o resumo da imagem, do espaço do SA e o dump completo do
+// superbloco
 void Ext4Shell::info() {
   std::cout << "==================================================\n";
   std::cout << "        INFORMAÇÕES DA IMAGEM (ARQUIVO SO)        \n";
@@ -233,12 +246,13 @@ void Ext4Shell::info() {
   std::cout << "Espaço Disponível: " << (free_blocks * block_size / 1024.0)
             << " KiB (" << (free_blocks * block_size / 1024.0 / 1024.0)
             << " MiB)\n";
-  std::cout << "Uso de Blocos: " << used_blocks << " / " << total_blocks
-            << " (" << (total_blocks ? (used_blocks * 100.0 / total_blocks) : 0.0)
+  std::cout << "Uso de Blocos: " << used_blocks << " / " << total_blocks << " ("
+            << (total_blocks ? (used_blocks * 100.0 / total_blocks) : 0.0)
             << "%)\n";
 
   std::cout << "\nUso de Inodes: " << used_inodes << " / " << total_inodes
-            << " (" << (total_inodes ? (used_inodes * 100.0 / total_inodes) : 0.0)
+            << " ("
+            << (total_inodes ? (used_inodes * 100.0 / total_inodes) : 0.0)
             << "%)\n";
 
   std::cout << "\n==================================================\n";
@@ -289,12 +303,15 @@ void Ext4Shell::ls() {
        *   1 = arquivo regular, 2 = diretório, 7 = link simbólico
        */
       char type_char = ' ';
-      if (entry->file_type == 2)      type_char = 'd';
-      else if (entry->file_type == 1) type_char = 'f';
-      else if (entry->file_type == 7) type_char = 'l';
+      if (entry->file_type == 2)
+        type_char = 'd';
+      else if (entry->file_type == 1)
+        type_char = 'f';
+      else if (entry->file_type == 7)
+        type_char = 'l';
 
-      std::cout << type_char << "  " << std::setw(6) << entry->inode
-                << "  " << name << "\n";
+      std::cout << type_char << "  " << std::setw(6) << entry->inode << "  "
+                << name << "\n";
     }
 
     offset += entry->rec_len;
@@ -377,8 +394,15 @@ void Ext4Shell::cd(const std::string &path) {
      * Ex: "/home/user" -> "/home"
      * Caso especial: "/home" -> "/"
      */
-    size_t last_slash = curr_path.rfind('/'); // Encontra a última barra no caminho corrente
-    std::string parent_path = (last_slash == 0) ? "/" : curr_path.substr(0, last_slash); // Se a última barra for a primeira, o pai é a raiz; caso contrário, pega o prefixo até a última barra
+    size_t last_slash =
+        curr_path.rfind('/'); // Encontra a última barra no caminho corrente
+    std::string parent_path =
+        (last_slash == 0)
+            ? "/"
+            : curr_path.substr(0,
+                               last_slash); // Se a última barra for a primeira,
+                                            // o pai é a raiz; caso contrário,
+                                            // pega o prefixo até a última barra
 
     uint32_t parent_inode_num = resolve_path(parent_path);
     if (parent_inode_num == 0) {
@@ -387,7 +411,7 @@ void Ext4Shell::cd(const std::string &path) {
     }
 
     curr_inode = parent_inode_num;
-    curr_path  = parent_path;
+    curr_path = parent_path;
     return;
   }
 
@@ -425,7 +449,8 @@ void Ext4Shell::cd(const std::string &path) {
   } else {
     // Caminho relativo: concatena ao caminho corrente
     if (curr_path.back() != '/') {
-      curr_path += '/'; // Adiciona barra se não houver no final do caminho corrente
+      curr_path +=
+          '/'; // Adiciona barra se não houver no final do caminho corrente
     }
     curr_path += path;
   }
@@ -464,7 +489,8 @@ void Ext4Shell::ext4_export(const std::string &source,
   }
 
   if (fs.inode_is_dir(src_inode)) {
-    std::cout << "[!] '" << source << "' é um diretório. export só suporta arquivos regulares\n";
+    std::cout << "[!] '" << source
+              << "' é um diretório. export só suporta arquivos regulares\n";
     return;
   }
 
@@ -473,7 +499,8 @@ void Ext4Shell::ext4_export(const std::string &source,
   // Cria (ou sobrescreve) o arquivo de destino no SO em modo binário
   std::ofstream out(target, std::ios::binary | std::ios::trunc);
   if (!out.is_open()) {
-    std::cout << "[!] Não foi possível criar o arquivo de destino: " << target << "\n";
+    std::cout << "[!] Não foi possível criar o arquivo de destino: " << target
+              << "\n";
     return;
   }
 
@@ -484,8 +511,8 @@ void Ext4Shell::ext4_export(const std::string &source,
     return;
   }
 
-  std::cout << "[*] Exportado: " << source << " -> " << target
-            << " (" << content.size() << " bytes)\n";
+  std::cout << "[*] Exportado: " << source << " -> " << target << " ("
+            << content.size() << " bytes)\n";
 }
 
 // ext4_import: importa um arquivo do SO para a imagem ext4
@@ -525,8 +552,16 @@ void Ext4Shell::balloc(uint64_t count) {
     return;
   }
 
-  std::cout << "[*] " << allocated_count << " bloco(s) alocado(s) a partir do bloco " << first_block << "\n";
+  std::cout << "[*] " << allocated_count
+            << " bloco(s) alocado(s) a partir do bloco " << first_block << "\n";
   for (uint64_t k = 0; k < allocated_count; k++) {
     std::cout << "    " << first_block + k << "\n";
   }
+}
+
+void Ext4Shell::mkdir(const std::string &name) {
+  if (name == "") {
+    std::cout << "[!] Nome vazio\n";
+  }
+  fs.create_dir(curr_path, name);
 }

@@ -4,6 +4,10 @@
 
 #include "ext4_utils.h"
 #include "io_utils.h"
+#include <cstdint>
+#include <cstring>
+#include <ctime>
+#include <filesystem>
 #include <iomanip>
 #include <iostream>
 #include <string_view>
@@ -26,13 +30,13 @@ bool Ext4FS::init(const std::string &img_path) {
   num_groups = get_num_groups();
   desc_size = sb.s_desc_size;
 
-/**
- * A GDT fica no bloco imediatamente após o superbloco.
- * Se block_size == 1024, o superbloco ocupa o bloco 1 (offset 1024),
- * então a GDT começa no bloco 2 (offset 2048).
- * Se block_size > 1024, o superbloco está dentro do bloco 0,
- * e a GDT começa no bloco 1 (offset = block_size).
- */
+  /**
+   * A GDT fica no bloco imediatamente após o superbloco.
+   * Se block_size == 1024, o superbloco ocupa o bloco 1 (offset 1024),
+   * então a GDT começa no bloco 2 (offset 2048).
+   * Se block_size > 1024, o superbloco está dentro do bloco 0,
+   * e a GDT começa no bloco 1 (offset = block_size).
+   */
   gdt_offset = ((block_size == 1024) ? 2 : 1) * block_size;
 
   if (!read_gdt()) {
@@ -55,16 +59,16 @@ bool Ext4FS::read_superblock() {
 
 // read_gdt: lê todos os group descriptors da Group Descriptor Table
 bool Ext4FS::read_gdt() {
-/**
- * Se s_desc_size for 0 (SA sem a feature 64bit), cada descriptor tem 32 bytes.
- * Com a feature 64bit ativa, s_desc_size geralmente é 64.
- */
+  /**
+   * Se s_desc_size for 0 (SA sem a feature 64bit), cada descriptor tem 32
+   * bytes. Com a feature 64bit ativa, s_desc_size geralmente é 64.
+   */
   uint16_t current_desc_size = sb.s_desc_size == 0 ? 32 : sb.s_desc_size;
   uint64_t offset = gdt_offset;
 
   // Lê cada group descriptor e armazena no vetor gdt
   for (uint64_t i = 0; i < num_groups; i++) {
-    group_description gd{}; 
+    group_description gd{};
 
     if (!read_bytes(image, offset, &gd, current_desc_size)) {
       return false;
@@ -81,17 +85,17 @@ bool Ext4FS::read_gdt() {
 
 // read_inode: localiza e lê um inode específico pelo seu número
 bool Ext4FS::read_inode(uint32_t inode_num, inode &inode_out) {
-  // Inode 0 não existe; inodes válidos começam em 1 
+  // Inode 0 não existe; inodes válidos começam em 1
   if (inode_num == 0 || inode_num > sb.s_inodes_count) {
     return false;
   }
 
-/**
- * Localização do inode no disco:
- *   1. Determinar em qual grupo de blocos o inode reside
- *   2. Determinar o índice do inode dentro desse grupo
- *   3. Calcular o offset absoluto na tabela de inodes do grupo
-*/
+  /**
+   * Localização do inode no disco:
+   *   1. Determinar em qual grupo de blocos o inode reside
+   *   2. Determinar o índice do inode dentro desse grupo
+   *   3. Calcular o offset absoluto na tabela de inodes do grupo
+   */
   uint32_t bg = get_inode_block_group(inode_num);
   uint32_t index = get_inode_index(inode_num);
 
@@ -104,11 +108,11 @@ bool Ext4FS::read_inode(uint32_t inode_num, inode &inode_out) {
 
 // read_inode_content: lê o conteúdo completo de um arquivo via extent tree
 std::vector<char> Ext4FS::read_inode_content(const inode &inode_in) {
-/**
- * O campo i_block[] do inode contém a raiz da extent tree.
- * Fazemos um cast direto para ext4_extent_header*, pois usamos #pragma pack(1)
- * e os bytes estão contíguos.
-*/
+  /**
+   * O campo i_block[] do inode contém a raiz da extent tree.
+   * Fazemos um cast direto para ext4_extent_header*, pois usamos #pragma
+   * pack(1) e os bytes estão contíguos.
+   */
   ext4_extent_header *header = (ext4_extent_header *)inode_in.i_block;
   std::vector<ext4_extent> leaf_extents;
 
@@ -119,7 +123,8 @@ std::vector<char> Ext4FS::read_inode_content(const inode &inode_in) {
 
   uint64_t file_size = get_file_size(inode_in);
   uint64_t rem_bytes = file_size;
-  std::vector<char> inode_content; // i_block pode ser maior que file_size em algum momento?
+  std::vector<char>
+      inode_content; // i_block pode ser maior que file_size em algum momento?
   inode_content.reserve(file_size);
 
   for (const auto &extent : leaf_extents) {
@@ -135,9 +140,10 @@ std::vector<char> Ext4FS::read_inode_content(const inode &inode_in) {
      * Isso evita ler dados de blocos que foram alocados mas ainda não escritos.
      * Compara-se com rem_bytes para não ler além do tamanho real do arquivo,
      * evitando leitura do padding do último bloco.
-    */
+     */
     uint64_t extent_bytes =
-        (extent.ee_len <= 32768 ? extent.ee_len : extent.ee_len - 32768) * block_size;
+        (extent.ee_len <= 32768 ? extent.ee_len : extent.ee_len - 32768) *
+        block_size;
     uint64_t bytes = extent_bytes < rem_bytes ? extent_bytes : rem_bytes;
     std::vector<char> buf(bytes);
 
@@ -252,7 +258,7 @@ uint32_t Ext4FS::find_inode_by_dir(const std::vector<char> &dir_content,
    */
   while (offset < dir_content.size()) {
     ext4_dir_entry_2 *dir_entry = (ext4_dir_entry_2 *)(&dir_content[offset]);
-    
+
     if (dir_entry->rec_len == 0) {
       break;
     }
@@ -288,7 +294,7 @@ bool Ext4FS::inode_is_used(uint32_t inode_num) {
   uint64_t offset = get_block_offset(bitmap_block);
   std::vector<char> bitmap(block_size);
   uint32_t inode_bit_offset = get_inode_bitmap_offset(inode_num);
-  
+
   if (!read_bytes(image, offset, bitmap.data(), block_size)) {
     return false;
   }
@@ -296,8 +302,8 @@ bool Ext4FS::inode_is_used(uint32_t inode_num) {
   return test_bit(bitmap, inode_bit_offset);
 }
 
-bool Ext4FS::block_is_used(uint64_t block_num){
- if (block_num < sb.s_first_data_block || block_num >= blocks_count) {
+bool Ext4FS::block_is_used(uint64_t block_num) {
+  if (block_num < sb.s_first_data_block || block_num >= blocks_count) {
     std::cerr << "invalid block given to block_is_used()\n";
     return false;
   }
@@ -307,7 +313,7 @@ bool Ext4FS::block_is_used(uint64_t block_num){
   uint64_t offset = get_block_offset(bitmap_block);
   std::vector<char> bitmap(block_size);
   uint32_t block_bit_offset = get_block_bitmap_offset(block_num);
-  
+
   if (!read_bytes(image, offset, bitmap.data(), block_size)) {
     return false;
   }
@@ -326,60 +332,73 @@ bool Ext4FS::update_sb() {
 
 // update_gdt_entry: persiste um group descriptor em memória na imagem
 bool Ext4FS::update_gdt_entry(uint64_t bg) {
-  uint16_t current_desc_size = (sb.s_desc_size == 0) ? 32 : sb.s_desc_size; // 32 bytes se a feature 64bit não estiver ativa, 64 bytes caso contrário
+  uint16_t current_desc_size =
+      (sb.s_desc_size == 0)
+          ? 32
+          : sb.s_desc_size; // 32 bytes se a feature 64bit não estiver ativa, 64
+                            // bytes caso contrário
   uint64_t offset = get_gdt_entry_offset(bg);
 
   if (!write_bytes(image, offset, &gdt[bg], current_desc_size)) {
-    std::cerr << "update_gdt_entry: erro ao escrever GDT entry do grupo " << bg << "\n";
+    std::cerr << "update_gdt_entry: erro ao escrever GDT entry do grupo " << bg
+              << "\n";
     return false;
   }
   return true;
 }
 
 // update_inode_bitmap: persiste o bitmap de inodes de um grupo na imagem
-bool Ext4FS::update_inode_bitmap(uint64_t bg, const std::vector<char>& bitmap) {
+bool Ext4FS::update_inode_bitmap(uint64_t bg, const std::vector<char> &bitmap) {
   uint64_t bitmap_block = get_inode_bitmap_block(static_cast<uint32_t>(bg));
   uint64_t offset = get_block_offset(bitmap_block);
 
-  if (!write_bytes(image, offset, const_cast<char*>(bitmap.data()), block_size)) {
-    std::cerr << "update_inode_bitmap: erro ao escrever bitmap do grupo " << bg << "\n";
+  if (!write_bytes(image, offset, const_cast<char *>(bitmap.data()),
+                   block_size)) {
+    std::cerr << "update_inode_bitmap: erro ao escrever bitmap do grupo " << bg
+              << "\n";
     return false;
   }
   return true;
 }
 
 // update_block_bitmap: persiste o bitmap de blocos de um grupo na imagem
-bool Ext4FS::update_block_bitmap(uint64_t bg, const std::vector<char>& bitmap) {
+bool Ext4FS::update_block_bitmap(uint64_t bg, const std::vector<char> &bitmap) {
   uint64_t bitmap_block = get_block_bitmap_block(static_cast<uint32_t>(bg));
   uint64_t offset = get_block_offset(bitmap_block);
 
-  if (!write_bytes(image, offset, const_cast<char*>(bitmap.data()), block_size)) {
-    std::cerr << "update_block_bitmap: erro ao escrever bitmap do grupo " << bg << "\n";
+  if (!write_bytes(image, offset, const_cast<char *>(bitmap.data()),
+                   block_size)) {
+    std::cerr << "update_block_bitmap: erro ao escrever bitmap do grupo " << bg
+              << "\n";
     return false;
   }
   return true;
 }
 
 // update_inode: persiste um inode na tabela de inodes do seu grupo na imagem
-bool Ext4FS::update_inode(uint32_t inode_num, const inode& inode_in) {
+bool Ext4FS::update_inode(uint32_t inode_num, const inode &inode_in) {
   if (inode_num == 0 || inode_num > sb.s_inodes_count) {
-    std::cerr << "update_inode: número de inode inválido: " << inode_num << "\n";
+    std::cerr << "update_inode: número de inode inválido: " << inode_num
+              << "\n";
     return false;
   }
 
-  uint32_t bg    = get_inode_block_group(inode_num);
+  uint32_t bg = get_inode_block_group(inode_num);
   uint32_t index = get_inode_index(inode_num);
   uint64_t inode_table_block = get_inode_table_block(bg);
-  uint64_t offset = get_block_offset(inode_table_block) + index * sb.s_inode_size;
+  uint64_t offset =
+      get_block_offset(inode_table_block) + index * sb.s_inode_size;
 
-  if (!write_bytes(image, offset, const_cast<inode*>(&inode_in), sizeof(inode_in))) {
+  if (!write_bytes(image, offset, const_cast<inode *>(&inode_in),
+                   sizeof(inode_in))) {
     std::cerr << "update_inode: erro ao escrever inode " << inode_num << "\n";
     return false;
   }
   return true;
 }
 
-// alloc_inode: aloca o primeiro inode livre no SA, atualizando bitmaps e contadores
+// alloc_inode: aloca o primeiro inode livre no SA, atualizando bitmaps e
+// contadores
 uint32_t Ext4FS::alloc_inode() {
   /**
    * Percorre cada grupo consultando o GDT antes de ler o bitmap,
@@ -415,8 +434,10 @@ uint32_t Ext4FS::alloc_inode() {
         // Cópia do group descriptor com contador de inodes livres decrementado
         group_description new_gd = gdt[bg];
         uint32_t free_count = free_in_group - 1;
-        new_gd.bg_free_inodes_count_lo = static_cast<uint16_t>(free_count & 0xFFFF);
-        new_gd.bg_free_inodes_count_hi = static_cast<uint16_t>((free_count >> 16) & 0xFFFF);
+        new_gd.bg_free_inodes_count_lo =
+            static_cast<uint16_t>(free_count & 0xFFFF);
+        new_gd.bg_free_inodes_count_hi =
+            static_cast<uint16_t>((free_count >> 16) & 0xFFFF);
 
         // Cópia do superbloco com s_free_inodes_count decrementado
         super_block new_sb = sb;
@@ -427,15 +448,17 @@ uint32_t Ext4FS::alloc_inode() {
         // mantendo o estado anterior intacto.
 
         gdt[bg] = new_gd;
-        sb      = new_sb;
+        sb = new_sb;
 
         if (!update_inode_bitmap(bg, new_bitmap)) {
-          std::cerr << "alloc_inode: erro ao escrever bitmap do grupo " << bg << "\n";
+          std::cerr << "alloc_inode: erro ao escrever bitmap do grupo " << bg
+                    << "\n";
           return 0;
         }
 
         if (!update_gdt_entry(bg)) {
-          std::cerr << "alloc_inode: erro ao escrever GDT do grupo " << bg << "\n";
+          std::cerr << "alloc_inode: erro ao escrever GDT do grupo " << bg
+                    << "\n";
           return 0;
         }
 
@@ -461,7 +484,7 @@ uint32_t Ext4FS::alloc_inode() {
 // a maior sequência contígua de bits 0, limitada a 'count'. Marca todos de uma
 // vez e atualiza GDT e superbloco. Retorna o primeiro bloco alocado e escreve
 // em 'allocated_count' a quantidade efetivamente alocada.
-uint64_t Ext4FS::alloc_blocks(uint64_t count, uint64_t& allocated_count) {
+uint64_t Ext4FS::alloc_blocks(uint64_t count, uint64_t &allocated_count) {
   allocated_count = 0;
 
   if (count == 0) {
@@ -491,9 +514,9 @@ uint64_t Ext4FS::alloc_blocks(uint64_t count, uint64_t& allocated_count) {
     // Estratégia: encontra a primeira sequência de comprimento >= 1 e para
     // assim que atingir 'count' ou acabarem os bits do grupo.
     uint32_t best_start = 0;
-    uint64_t best_len   = 0;
-    uint32_t run_start  = 0;
-    uint64_t run_len    = 0;
+    uint64_t best_len = 0;
+    uint32_t run_start = 0;
+    uint64_t run_len = 0;
 
     // Varre cada bit do bitmap do grupo
     for (uint32_t i = 0; i < sb.s_blocks_per_group; i++) {
@@ -503,17 +526,18 @@ uint64_t Ext4FS::alloc_blocks(uint64_t count, uint64_t& allocated_count) {
         }
         run_len++;
 
-        // Assim que acharmos uma run com pelo menos 'count' blocos, para na hora
+        // Assim que acharmos uma run com pelo menos 'count' blocos, para na
+        // hora
         if (run_len >= count) {
           best_start = run_start;
-          best_len   = count;
+          best_len = count;
           break;
         }
       } else {
         // fim de uma run — guarda se for a maior vista até agora
         if (run_len > best_len) {
           best_start = run_start;
-          best_len   = run_len;
+          best_len = run_len;
         }
         run_len = 0;
       }
@@ -522,7 +546,7 @@ uint64_t Ext4FS::alloc_blocks(uint64_t count, uint64_t& allocated_count) {
     // Fecha a última run caso o loop termine com uma sequência em aberto
     if (run_len > best_len) {
       best_start = run_start;
-      best_len   = run_len;
+      best_len = run_len;
     }
 
     if (best_len == 0) {
@@ -544,7 +568,8 @@ uint64_t Ext4FS::alloc_blocks(uint64_t count, uint64_t& allocated_count) {
     group_description new_gd = gdt[bg];
     uint32_t free_count = free_in_group - static_cast<uint32_t>(to_alloc);
     new_gd.bg_free_blocks_count_lo = static_cast<uint16_t>(free_count & 0xFFFF);
-    new_gd.bg_free_blocks_count_hi = static_cast<uint16_t>((free_count >> 16) & 0xFFFF);
+    new_gd.bg_free_blocks_count_hi =
+        static_cast<uint16_t>((free_count >> 16) & 0xFFFF);
 
     // Atualiza estado em memória antes de gravar
     uint64_t free_blocks = get_free_blocks_count() - to_alloc;
@@ -554,7 +579,8 @@ uint64_t Ext4FS::alloc_blocks(uint64_t count, uint64_t& allocated_count) {
 
     // grava na imagem (ordem: bitmap → GDT → superbloco)
     if (!update_block_bitmap(bg, new_bitmap)) {
-      std::cerr << "alloc_blocks: erro ao escrever bitmap do grupo " << bg << "\n";
+      std::cerr << "alloc_blocks: erro ao escrever bitmap do grupo " << bg
+                << "\n";
       return 0;
     }
 
@@ -568,7 +594,8 @@ uint64_t Ext4FS::alloc_blocks(uint64_t count, uint64_t& allocated_count) {
       return 0;
     }
 
-    // Converte (grupo, índice local) → número absoluto do primeiro bloco alocado
+    // Converte (grupo, índice local) → número absoluto do primeiro bloco
+    // alocado
     uint64_t first_block = get_abs_block(bg, best_start);
 
     allocated_count = to_alloc;
@@ -941,4 +968,136 @@ void Ext4FS::print_inode(const inode &inode_in, uint32_t /*inode_num*/) const {
             << "\n";
   std::cout << std::setw(w) << "i_version_hi:" << inode_in.i_version_hi << "\n";
   std::cout << std::setw(w) << "i_projid:" << inode_in.i_projid << "\n";
+}
+
+bool Ext4FS::write_dir_entry(uint32_t parent_inode_num, uint32_t new_inode_num,
+                             const std::string &name, uint8_t file_type) {
+  inode parent;
+  if (!read_inode(parent_inode_num, parent))
+    return false;
+
+  uint16_t needed_len = dir_ent_min_len(static_cast<uint8_t>(name.size()));
+
+  auto *header = reinterpret_cast<const ext4_extent_header *>(parent.i_block);
+  std::vector<ext4_extent> extents;
+  if (!read_leaf_extents(header, extents))
+    return false;
+
+  for (const auto &extent : extents) {
+    uint64_t phys_start = get_extent_phys_block(extent);
+    for (uint32_t b = 0; b < extent.ee_len; b++) {
+      uint64_t block_num = phys_start + b;
+      std::vector<char> buf(block_size);
+      if (!read_bytes(image, get_block_offset(block_num), buf.data(),
+                      block_size))
+        return false;
+
+      size_t offset = 0;
+      while (offset < block_size) {
+        auto *entry = reinterpret_cast<ext4_dir_entry_2 *>(buf.data() + offset);
+        if (entry->rec_len == 0)
+          break;
+
+        uint16_t actual_len =
+            entry->inode == 0 ? 0 : dir_ent_min_len(entry->name_len);
+        uint16_t free_space = entry->rec_len - actual_len;
+
+        if (free_space >= needed_len) {
+          uint16_t old_rec_len = entry->rec_len;
+          if (entry->inode != 0)
+            entry->rec_len = actual_len; // encolhe a entrada existente
+          else
+            actual_len =
+                0; // slot totalmente não utilizado, reutiliza por inteiro
+
+          size_t new_off = offset + actual_len;
+          auto *new_entry =
+              reinterpret_cast<ext4_dir_entry_2 *>(buf.data() + new_off);
+          new_entry->inode = new_inode_num;
+          new_entry->rec_len =
+              old_rec_len - actual_len; // consome o espaço restante
+          new_entry->name_len = static_cast<uint8_t>(name.size());
+          new_entry->file_type = file_type;
+          std::memcpy(buf.data() + new_off + 8, name.data(), name.size());
+
+          return write_bytes(image, get_block_offset(block_num), buf.data(),
+                             block_size);
+        }
+        offset += entry->rec_len;
+      }
+    }
+  }
+
+  // suposição: sempre há espaço
+  std::cout
+      << "[!] write_dir_entry: nenhum espaço livre encontrado (inesperado)\n";
+  return false;
+}
+
+// cria um arquivo de diretório
+void Ext4FS::create_dir(const std::string &parent_path,
+                        const std::string &name) {
+  // aloca um bloco de dados para o diretório
+  uint64_t allocated_count = 1;
+  auto block = alloc_blocks(1, allocated_count);
+
+  // aloca um i-node
+  auto inode_num = alloc_inode();
+
+  // preencher os dados do inode
+  uint32_t now = static_cast<uint32_t>(time(nullptr));
+  inode inode_in{
+      .i_mode = 0x4000 | 0755, // S_IFDIR | rwxr-xr-x (mode + permission bits!)
+      .i_uid = 0,              // lower 16 bits of owner UID
+      .i_size_lo = (uint32_t)block_size,
+      .i_atime = now,     // tempo de acesso
+      .i_ctime = now,     // tempo de mudaça
+      .i_mtime = now,     // tempo de modificação
+      .i_dtime = 0,       // tempo de exclusão
+      .i_gid = 0,         // lower 16 bits of owner GID
+      .i_links_count = 2, // '.' inside it + the entry in the parent — see below
+      .i_blocks_lo =
+          (uint32_t)block_size / 512, // número de seções de 512B ocupados
+      .i_flags = 0x80000,
+      .i_block = {(uint32_t)block}, // associa o bloco com o diretório
+                                    //.i_generation = random_value,
+  };
+
+  // escrever dados do arquivo no inode correspondente:
+  bool write_result = true;
+  write_result = update_inode(inode_num, inode_in);
+  if (write_result == false) {
+    std::cout << "[!] Erro fazendo update do inode\n";
+    return;
+  }
+
+  // escrever dir_entry no diretório pai
+  uint32_t parent_inode_num = find_inode_by_path(parent_path);
+  if (parent_inode_num == 0) {
+    std::cout << "[!] Pai não encontrado\n";
+    return;
+  }
+  write_dir_entry(parent_inode_num, inode_num, name, 2);
+
+  // escrever dir_entry '/.'
+  std::string dir_entry_name = ".";
+  write_dir_entry(inode_num, inode_num, dir_entry_name, 2);
+
+  // e para '/..'
+  dir_entry_name = "..";
+  write_dir_entry(inode_num, parent_inode_num, dir_entry_name, 2);
+}
+
+std::string Ext4FS::join_parent_path(std::vector<std::string> tokens) {
+  std::string parent_path;
+  if (tokens.empty()) {
+    parent_path = "/";
+  } else {
+    parent_path = "/";
+    for (size_t i = 0; i < tokens.size(); i++) {
+      parent_path += tokens[i];
+      if (i + 1 < tokens.size())
+        parent_path += "/";
+    }
+  }
 }
